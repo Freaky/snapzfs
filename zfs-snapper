@@ -1,0 +1,180 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'time'
+require 'pp'
+
+# Options = <<EOC
+# -a	--all		Operate on all ZFS filesystems
+# -n	--dry-run	
+# EOC
+
+# settings = {
+# }
+
+# OptionParser.new do |opts|
+# 	opts.banner = "Usage: #{$0} [options] [dataset .. | --all]"
+
+# 	Options.each do |o|
+# 		o = o.split(/\t+/)
+# 		opts.on(*o) {|v| o[v[0]] = o }
+# 	end
+# end
+
+module ZFS
+	class CommandError < StandardError
+	end
+
+	class << self
+		def datasets(depth: nil)
+			op = %w(list -H -o name)
+			op << "-d #{Integer(depth)}" if depth
+			zfs(op).lines.map(&:chomp)
+		end
+
+		def snapshots
+			Hash.new {|h,k| h[k] = [] }.tap do |snaps|
+				zfs(%w(list -H -o name -t snapshot)).lines.map(&:chomp).each do |snapshot|
+					dataset, snapname = snapshot.split('@', 2)
+					snaps[dataset] << snapname
+				end
+			end
+		end
+
+		def snapshot!(dataset, name, recurse: false)
+			op = %w(snapshot)
+			op << '-r' if recurse
+			op << "#{dataset}@#{name}"
+			zfs(op)
+		end
+
+		def destroy_snapshot!(dataset, name, recurse: false)
+			op = %w(destroy -d)
+			op << '-r' if recurse
+			op << '-n'
+			op << "#{dataset}@#{name}"
+			zfs(op)
+		end
+
+
+		def zfs(args)
+			run([Which[:zfs], *args])
+		end
+
+		def run(cmd)
+			p cmd if $VERBOSE
+
+			r,w = IO.pipe
+			out = IO.popen(cmd, err: w){|f| f.read }
+			w.close
+			err = r.read || ''
+			r.close
+
+			if $?.success?
+				return out || true
+			else
+				raise CommandError, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
+			end
+		end
+
+		Which = Hash.new do |hash, cmd|
+			exts = ENV['PATHEXT'] ? ENV['PATHEXT'].split(';') : ['']
+			ENV['PATH'].split(File::PATH_SEPARATOR).each do |path|
+				exts.each { |ext|
+					exe = File.join(path, "#{cmd}#{ext}")
+					if File.executable? exe
+						hash[cmd] = exe
+						break
+					end
+				}
+			end
+			hash[cmd]
+		end
+	end
+end
+
+#p ZFS.datasets(depth: 0)
+#p ZFS.snapshots
+#p ZFS.destroy_snapshot!('root', 'foo')
+
+
+Now = Time.new
+
+AutoSnapshot = Struct.new(:dataset, :name, :timestamp, :keep)
+class AutoSnapshot
+	def self.parse(dataset, name)
+		timestamp = Time.strptime(name, SnapFormat)
+		self.new(dataset, name, timestamp)
+	rescue ArgumentError
+		nil
+	end
+
+	SnapFormat = 'auto.%F.%R' # yyyy-mm-dd.hh:mm
+	def self.snapshot!(dataset)
+		name = Now.strftime(SnapFormat)
+		ZFS.snapshot!(dataset, name, recurse: true)
+		AutoSnapshot.parse(dataset, name)
+	end
+end
+
+# 3 snapshots at 15 minute intervals
+# 8 at one hour intervals
+# 7 at 1 day intervals
+# 4 at 1 week intervals
+# or..
+# 3 snapshots in the past 15 minutes
+# 8 snapshots in the past hour
+# 7 snapshots in the past day
+# 4 snapshots in the past month
+# former I think.
+snaptargets = [['15m', 3], ['1h', 8], ['1d', 7], ['1w', 4]]
+
+def to_seconds(string)
+	raise ArgumentError, "Invalid duration: #{string.dump}" unless md = /\A(\d+(?:\.\d+)?)([sSmhHdDwWMyY]?)\z/.match(string)
+	num = Float(md[1])
+	num *= case md[2]
+	when ?m then 60
+	when /h/i then 60*60
+	when /d/i then 60*60*24
+	when /w/i then 60*60*24*7
+	when ?M then 60*60*24*31
+	when /y/i then 60*60*24*365
+	else 1
+	end
+end
+
+SnapTarget = Struct.new(:name, :seconds, :count, :timespan, :snapshots)
+targets = snaptargets.map do |interval, count|
+	seconds = to_seconds(interval)
+	SnapTarget.new(interval, seconds, count, Range.new(Time.at(Now - seconds * count), Time.at(Now - seconds)), [])
+end.sort_by(&:seconds)
+
+testsnaps = []
+
+
+pp targets
+
+snapshots = ZFS.snapshots
+ZFS.datasets(depth: 0).each do |dataset|
+	snaps = snapshots[dataset]
+	snapshotted = false
+
+	if snaps.map! {|snap| AutoSnapshot.parse(dataset, snap) }.compact!.any?
+		snaps.sort_by!(&:timestamp)
+		targets.each do |target|
+			if snaps.first.timestamp <= target.timespan.last and !snapshotted
+				snaps.unshift AutoSnapshot.snapshot!(dataset)
+				snaps.first.keep = true
+				snapshotted = true
+			end
+
+			snaps.each do |snap|
+				
+
+			end
+		end
+
+	else
+		auto_snapshot(dataset)
+	end
+end
