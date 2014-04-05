@@ -4,8 +4,11 @@ require 'optparse'
 require 'time'
 require 'pp'
 
+if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
+	abort("Ruby version 2.0+ is required.")
+end
+
 # Options = <<EOC
-# -a	--all		Operate on all ZFS filesystems
 # -n	--dry-run	
 # EOC
 
@@ -13,7 +16,7 @@ require 'pp'
 # }
 
 # OptionParser.new do |opts|
-# 	opts.banner = "Usage: #{$0} [options] [dataset .. | --all]"
+# 	opts.banner = "Usage: #{$0} [options]"
 
 # 	Options.each do |o|
 # 		o = o.split(/\t+/)
@@ -22,44 +25,16 @@ require 'pp'
 # end
 
 module ZFS
-	class CommandError < StandardError
-	end
+	Now = Time.new
 
-	class << self
-		def datasets(depth: nil)
-			op = %w(list -H -o name)
-			op << "-d #{Integer(depth)}" if depth
-			zfs(op).lines.map(&:chomp)
+	module Command
+		class Error < StandardError
 		end
-
-		def snapshots
-			Hash.new {|h,k| h[k] = [] }.tap do |snaps|
-				zfs(%w(list -H -o name -t snapshot)).lines.map(&:chomp).each do |snapshot|
-					dataset, snapname = snapshot.split('@', 2)
-					snaps[dataset] << snapname
-				end
-			end
-		end
-
-		def snapshot!(dataset, name, recurse: false)
-			op = %w(snapshot)
-			op << '-r' if recurse
-			op << "#{dataset}@#{name}"
-			zfs(op)
-		end
-
-		def destroy_snapshot!(dataset, name, recurse: false)
-			op = %w(destroy -d)
-			op << '-r' if recurse
-			op << '-n'
-			op << "#{dataset}@#{name}"
-			zfs(op)
-		end
-
 
 		def zfs(args)
 			run([Which[:zfs], *args])
 		end
+		module_function :zfs
 
 		def run(cmd)
 			p cmd if $VERBOSE
@@ -73,9 +48,10 @@ module ZFS
 			if $?.success?
 				return out || true
 			else
-				raise CommandError, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
+				raise Error, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
 			end
 		end
+		module_function :run
 
 		Which = Hash.new do |hash, cmd|
 			exts = ENV['PATHEXT'] ? ENV['PATHEXT'].split(';') : ['']
@@ -91,29 +67,98 @@ module ZFS
 			hash[cmd]
 		end
 	end
+
+	class Dataset
+	end
+
+	class Snapshot
+	end
+
+	class Snapper
+		def auto_snapshot_property() "com.sun:auto-snapshot" end
+		def snapshot_class_property() "st.hur:snapshot-class" end
+
+		def datasets_to_snapshot
+			datasets = list(type: %w(filesystem volume), properties: [auto_snapshot_property])
+			on, off = datasets.partition {|name,props| props[auto_snapshot_property] == 'true' }
+			on = Hash[on]
+			off = Hash[off]
+			off.each do |name, props|
+				parent = File.dirname(name)
+				if prt = on[parent]
+					prt['no-recursive-snapshot'] = true
+				end
+			end
+			on
+		end
+
+		def managed_snapshots
+			snapshots = list(type: 'snapshot', properties: ['used',snapshot_class_property])
+			snapshots.select {|name, props| props[snapshot_class_property] == 'true' }
+		end
+
+		def list(type: nil, properties: %w())
+			properties = ['name', 'type', *properties]
+			op = %w(list -S name -H -o)
+			op << properties.join(',')
+			op += ['-t', Array(type).join(',')] if type
+			datasets = Command.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
+			Hash[datasets.map {|name,*props| [name, Hash[properties[1..-1].zip(props)]] }]
+		end
+	end
 end
 
-#p ZFS.datasets(depth: 0)
-#p ZFS.snapshots
-#p ZFS.destroy_snapshot!('root', 'foo')
+
+snapper = ZFS::Snapper.new
+pp snapper.datasets_to_snapshot
+pp snapper.managed_snapshots
+
+exit
 
 
 Now = Time.new
 
-AutoSnapshot = Struct.new(:dataset, :name, :timestamp, :keep)
+AutoSnapshot = Struct.new(:dataset, :name, :classes, :timestamp, :keep)
 class AutoSnapshot
-	def self.parse(dataset, name)
+	SnapFormat = 'auto.%F.%R' # yyyy-mm-dd.hh:mm
+	def initialize(dataset)
+		@dataset = dataset
+	end
+
+	def self.parse(dataset, name, keep: false)
 		timestamp = Time.strptime(name, SnapFormat)
-		self.new(dataset, name, timestamp)
+		self.new(dataset, name, timestamp, keep)
 	rescue ArgumentError
 		nil
 	end
 
-	SnapFormat = 'auto.%F.%R' # yyyy-mm-dd.hh:mm
-	def self.snapshot!(dataset)
+	def snapshot!
 		name = Now.strftime(SnapFormat)
 		ZFS.snapshot!(dataset, name, recurse: true)
 		AutoSnapshot.parse(dataset, name)
+	end
+end
+
+class Dataset
+	attr_reader :dataset
+	attr_reader :snapshots
+
+	def initialize(dataset)
+		@dataset = dataset
+		@snapshotted = false
+		@@snapshots ||= ZFS.snapshots
+		@snapshots = @@snapshots[dataset].map {|s| AutoSnapshot.parse(s) }.compact.sort_by(&:timestamp)
+	end
+
+	def snapshot!(classes)
+		@snapshotted ||= make_snapshot!
+	end
+
+	private
+	def make_snapshot!(classes)
+		name = Now.strftime(SnapFormat)
+		ZFS.snapshot!(dataset, name, recurse: true)
+		AutoSnapshot.parse(dataset, name, keep: true).tap {|as| @auto_snapshots.unshift as }
 	end
 end
 
@@ -121,12 +166,6 @@ end
 # 8 at one hour intervals
 # 7 at 1 day intervals
 # 4 at 1 week intervals
-# or..
-# 3 snapshots in the past 15 minutes
-# 8 snapshots in the past hour
-# 7 snapshots in the past day
-# 4 snapshots in the past month
-# former I think.
 snaptargets = [['15m', 3], ['1h', 8], ['1d', 7], ['1w', 4]]
 
 def to_seconds(string)
@@ -154,27 +193,35 @@ testsnaps = []
 
 pp targets
 
-snapshots = ZFS.snapshots
-ZFS.datasets(depth: 0).each do |dataset|
-	snaps = snapshots[dataset]
-	snapshotted = false
-
-	if snaps.map! {|snap| AutoSnapshot.parse(dataset, snap) }.compact!.any?
-		snaps.sort_by!(&:timestamp)
-		targets.each do |target|
-			if snaps.first.timestamp <= target.timespan.last and !snapshotted
-				snaps.unshift AutoSnapshot.snapshot!(dataset)
-				snaps.first.keep = true
-				snapshotted = true
-			end
-
-			snaps.each do |snap|
-				
-
-			end
-		end
-
-	else
-		auto_snapshot(dataset)
+ds = Dataset.new('backup')
+targets.each do |target|
+	if ds.snapshots.any? and ds.snapshots.first.timestamp <= target.timespan.last
+		ds.snapshot!
 	end
 end
+ ds.auto_snapshots
+
+# snapshots = ZFS.snapshots
+# ZFS.datasets(depth: 0).each do |dataset|
+# 	snaps = snapshots[dataset]
+# 	snapshotted = false
+
+# 	if snaps.map! {|snap| AutoSnapshot.parse(dataset, snap) }.compact!.any?
+# 		snaps.sort_by!(&:timestamp)
+# 		targets.each do |target|
+# 			if snaps.first.timestamp <= target.timespan.last and !snapshotted
+# 				snaps.unshift AutoSnapshot.snapshot!(dataset)
+# 				snaps.first.keep = true
+# 				snapshotted = true
+# 			end
+
+# 			snaps.each do |snap|
+
+
+# 			end
+# 		end
+
+# 	else
+# 		auto_snapshot(dataset)
+# 	end
+# end
