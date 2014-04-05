@@ -9,22 +9,24 @@ if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 end
 
 # Options = <<EOC
-# -n	--dry-run	
+# -n	--dry-run	Bla
+# -v	--verbose	Print commands and other debug info
 # EOC
 
 # settings = {
 # }
 
 # OptionParser.new do |opts|
-# 	opts.banner = "Usage: #{$0} [options]"
-
+# 	opts.banner = "Usage: #{$0} [options] [interval[:number of snapshots] ..]"
 # 	Options.each do |o|
 # 		o = o.split(/\t+/)
 # 		opts.on(*o) {|v| o[v[0]] = o }
 # 	end
 # end
 
-module ZFS
+TestSnapshots = []
+
+module Snapper
 	Now = Time.new
 
 	module Command
@@ -68,53 +70,101 @@ module ZFS
 		end
 	end
 
-	class Dataset
-	end
+	class ZFS
+		class << self
+			#def auto_snapshot_property()    "com.sun:auto-snapshot" end
+			def auto_snapshot_property()    "st.hur:auto-snapshot" end
+			def snapshot_intervals_property() "st.hur:snapshot-intervals" end
 
-	class Snapshot
-	end
-
-	class Snapper
-		def auto_snapshot_property() "com.sun:auto-snapshot" end
-		def snapshot_class_property() "st.hur:snapshot-class" end
-
-		def datasets_to_snapshot
-			datasets = list(type: %w(filesystem volume), properties: [auto_snapshot_property])
-			on, off = datasets.partition {|name,props| props[auto_snapshot_property] == 'true' }
-			on = Hash[on]
-			off = Hash[off]
-			off.each do |name, props|
-				parent = File.dirname(name)
-				if prt = on[parent]
-					prt['no-recursive-snapshot'] = true
-				end
+			def managed_datasets
+				datasets = list(type: %w(filesystem volume), properties: [snapshot_intervals_property, auto_snapshot_property])
+				datasets.select {|name,props| props[auto_snapshot_property] == 'true' }
 			end
-			on
+
+			def managed_snapshots
+				snapshots = list(type: 'snapshot', properties: ['used',snapshot_intervals_property])
+				snapshots.select {|name, props| props[snapshot_intervals_property] != '-' }
+			end
+
+			def list(type: %w(filesystem volume), properties: %w())
+				properties = ['name', 'type', *properties]
+				op = %w(list -S name -H -o)
+				op << properties.join(',')
+				op += ['-t', Array(type).join(',')]
+				datasets = Command.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
+				Hash[datasets.map {|name,*props| [name, Hash[properties[1..-1].zip(props)]] }]
+			end
+
+			def empty_snapshots
+				managed_snapshots.select {|name, props| props['used'] == '0' }
+			end
+		end
+	end
+
+	class Dataset
+		def initialize(name)
 		end
 
-		def managed_snapshots
-			snapshots = list(type: 'snapshot', properties: ['used',snapshot_class_property])
-			snapshots.select {|name, props| props[snapshot_class_property] == 'true' }
+		def snapshots(interval=nil)
+		end
+	end
+
+	def self.to_seconds(string)
+		raise ArgumentError, "Invalid duration: #{string.dump}" unless md = /\A(\d+(?:\.\d+)?)([sSmhHdDwWMyY]?)\z/.match(string)
+		num = Float(md[1])
+		num *= case md[2]
+		when ?m   then 60
+		when /h/i then 60*60
+		when /d/i then 60*60*24
+		when /w/i then 60*60*24*7
+		when ?M   then 60*60*24*31
+		when /y/i then 60*60*24*365
+		else 1
+		end
+	end
+
+	Defaults = {
+	}
+
+	def self.run(args)
+		intervals = {'15m' => 4, '1h' => 24, '1d' => 7, '1w' => 4}
+		intervals = intervals.map do |interval, count|
+			{interval: interval, seconds: to_seconds(interval), count: count, snapshots: []}
 		end
 
-		def list(type: nil, properties: %w())
-			properties = ['name', 'type', *properties]
-			op = %w(list -S name -H -o)
-			op << properties.join(',')
-			op += ['-t', Array(type).join(',')] if type
-			datasets = Command.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
-			Hash[datasets.map {|name,*props| [name, Hash[properties[1..-1].zip(props)]] }]
+		datasets  = ZFS.managed_datasets
+		snapshots = ZFS.managed_snapshots
+
+		snapshots_by_interval = 
+		datasets.each do |name, props|
+			props[:snapshots] = snapshots[name] || []
+			props[:snapshots].each do |snapshot|
+				intervals.assoc(snapshot['interval']).snapshots = snapshot
+			end
 		end
+
+		new_snapshots = Hash.new {|h,k| h[k] = [] }
+		intervals.each do |interval|
+			datasets.each do |dataset|
+
+			end
+		end
+
+		empty = ZFS.empty_snapshots
+		pp empty
+
+
+
+		p c
+		p datasets
+		p snapshots
 	end
 end
 
 
-snapper = ZFS::Snapper.new
-pp snapper.datasets_to_snapshot
-pp snapper.managed_snapshots
+snapper = Snapper.run(ARGV)
 
 exit
-
 
 Now = Time.new
 
@@ -168,19 +218,7 @@ end
 # 4 at 1 week intervals
 snaptargets = [['15m', 3], ['1h', 8], ['1d', 7], ['1w', 4]]
 
-def to_seconds(string)
-	raise ArgumentError, "Invalid duration: #{string.dump}" unless md = /\A(\d+(?:\.\d+)?)([sSmhHdDwWMyY]?)\z/.match(string)
-	num = Float(md[1])
-	num *= case md[2]
-	when ?m then 60
-	when /h/i then 60*60
-	when /d/i then 60*60*24
-	when /w/i then 60*60*24*7
-	when ?M then 60*60*24*31
-	when /y/i then 60*60*24*365
-	else 1
-	end
-end
+
 
 SnapTarget = Struct.new(:name, :seconds, :count, :timespan, :snapshots)
 targets = snaptargets.map do |interval, count|
