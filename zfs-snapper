@@ -2,6 +2,7 @@
 
 require 'optparse'
 require 'time'
+require 'bigdecimal'
 require 'pp'
 
 if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
@@ -71,9 +72,13 @@ module Snapper
 	end
 
 	class ZFS
+		class Dataset
+			def initialize(name, foo)
+			end
+		end
 		class << self
 			#def auto_snapshot_property()    "com.sun:auto-snapshot" end
-			def auto_snapshot_property()    "st.hur:auto-snapshot" end
+			def auto_snapshot_property()      "st.hur:auto-snapshot" end
 			def snapshot_intervals_property() "st.hur:snapshot-intervals" end
 
 			def managed_datasets
@@ -90,7 +95,7 @@ module Snapper
 				properties = ['name', 'type', *properties]
 				op = %w(list -S name -H -o)
 				op << properties.join(',')
-				op += ['-t', Array(type).join(',')]
+				op += ['-t', Array(type).join(',')] if type
 				datasets = Command.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
 				Hash[datasets.map {|name,*props| [name, Hash[properties[1..-1].zip(props)]] }]
 			end
@@ -110,6 +115,27 @@ module Snapper
 	end
 
 	def self.to_seconds(string)
+		secs = 0
+		parts = string.scan(/(\d+(?:\.\d+)?)\s*(\w*)/)
+		p parts
+		parts.each do |num, qualifier|
+			psecs = BigDecimal(num)
+			psecs *= case qualifier
+			when /\As(ec(s|onds)?)?\Z/i, nil, '' then 1
+			when /\Am(in(s|ute)?)?\Z/i then 60
+			when /\Ah(our|r)?s?\Z/i then 3600
+			when /\Ad(ay|y)?s?\Z/i then 3600*24
+			when /\Aw(eek|k)?s?\Z/i then 3600*24*7
+			when /\Am(o?n(th)?)?s?\Z/i then 3600*24*31
+			when /\Ay(year|r)s?\Z/i then 3600*24*365
+			else raise ArgumentError, "Unknown duration qualifier #{qualifier.to_s.dump}"
+			end
+			secs += psecs.to_i
+		end
+		secs
+	end
+
+	def self.old_to_seconds(string)
 		raise ArgumentError, "Invalid duration: #{string.dump}" unless md = /\A(\d+(?:\.\d+)?)([sSmhHdDwWMyY]?)\z/.match(string)
 		num = Float(md[1])
 		num *= case md[2]
@@ -127,10 +153,14 @@ module Snapper
 	}
 
 	def self.run(args)
-		intervals = {'15m' => 4, '1h' => 24, '1d' => 7, '1w' => 4}
-		intervals = intervals.map do |interval, count|
-			{interval: interval, seconds: to_seconds(interval), count: count, snapshots: []}
+		while s = gets
+			p to_seconds(s) rescue p $!
 		end
+		intervals = {'15 min' => 4, '1 hour' => 24, '1 day' => 7, '1 week' => 4, '1 month' => 12}
+		intervals.each do |interval, count|
+			intervals[interval] = {count: count, seconds: to_seconds(interval), snapshots: []}
+		end
+		pp intervals
 
 		datasets  = ZFS.managed_datasets
 		snapshots = ZFS.managed_snapshots
@@ -138,12 +168,14 @@ module Snapper
 		snapshots_by_interval = 
 		datasets.each do |name, props|
 			props[:snapshots] = snapshots[name] || []
-			props[:snapshots].each do |snapshot|
-				intervals.assoc(snapshot['interval']).snapshots = snapshot
-			end
 		end
 
 		new_snapshots = Hash.new {|h,k| h[k] = [] }
+		datasets.each do |dataset|
+			intervals.each do |interval|
+				
+			end
+		end
 		intervals.each do |interval|
 			datasets.each do |dataset|
 
@@ -153,11 +185,8 @@ module Snapper
 		empty = ZFS.empty_snapshots
 		pp empty
 
-
-
-		p c
-		p datasets
-		p snapshots
+		pp datasets
+		pp snapshots
 	end
 end
 
