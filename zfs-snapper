@@ -198,6 +198,7 @@ module Snapper
 		3600        => %w(h hr hour hours hourly),
 		3600*24     => %w(d dy day days daily),
 		3600*24*7   => %w(wk week weeks weekly),
+		3600*24*14  => %w(f fort fortnight fortnightly),
 		3600*24*31  => %w(mn mon month months monthly),
 		3600*24*356 => %w(y yr year years yearly),
 	}
@@ -228,10 +229,6 @@ module Snapper
 	}
 
 	def self.run(args)
-		#intervals = {'15 min' => 4, '1 hour' => 24, '1 day' => 7, '1 week' => 4, '1 month' => 12}
-		#intervals.each do |interval, count|
-		#	intervals[interval] = {count: count, seconds: to_seconds(interval), snapshots: []}
-		#end
 		intervals = parse_intervals("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
 		pp intervals
 
