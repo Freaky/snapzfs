@@ -1,17 +1,60 @@
 #!/usr/bin/env ruby
+#
+# zfs-snapper: Yet another ZFS automatic snapshot management script.
+#
+# Distinguishing features?
+#
+# - Doesn't create unnecessary duplicate snapshots.  If you have frequent, hourly,
+#   daily, weekly and monthly snapshots, they will share a single one, you won't
+#   get five different snapshots with different names.
+#
+# - Makes extensive use of ZFS user properties to specify what should be
+#   snapshotted (and when?)
+#
+# - Simple.  I'm not writing 30 lines of code to work out whether I can safely
+#   call snapshot -r on a root pool when I can just pass the full list with 2.
+#   Semantically there appears to be no appreciable difference.
+#
+# - Cares about snapshot ages, not specific times or dates.  If you want to keep
+#   monthly snapshots, it'll make a monthly snapshot the first time it's run set
+#   to expire in 31 days, rather than waiting until the first day of the month.
+#
+# - Create named ad-hoc snapshots that will auto-expire.
+#
+# - Management commands.  List, hold, destroy, create.
+#
+# - Automatically add cronjob?
+#
+# - Minimap dependencies. You need a fairly recent Ruby (2.0+).
+#   No gems, no Gemfile, no messing about with bundler, just Ruby.
+#   It's all one entirely self-contained script.
+#
+# - Tested.
+#
+#
+#
+#
+#
+#
+#
+
+if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
+	abort("Ruby version 2.0+ is required.")
+end
 
 require 'optparse'
 require 'time'
 require 'bigdecimal'
 require 'pp'
 
-if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
-	abort("Ruby version 2.0+ is required.")
-end
-
+# Commands = <<EOC
+# snapshot
+# EOC
 # Options = <<EOC
-# -n	--dry-run	Bla
+# -s	--snapshot [interval:count[,..]]
+# -n	--dry-run	Just say what we'd do.
 # -v	--verbose	Print commands and other debug info
+# -d	--delay	Add a random delay to the snapshot.
 # EOC
 
 # settings = {
@@ -28,18 +71,18 @@ end
 TestSnapshots = []
 
 module Snapper
-	Now = Time.new
+	Now = Time.new.gmtime     # 
+	SnapFormat = 'auto.%F.%RZ' # yyyy-mm-dd.hh:mm
 
-	module Command
+	module CommandRunner
 		class Error < StandardError
 		end
 
-		def zfs(args)
+		def self.zfs(args)
 			run([Which[:zfs], *args])
 		end
-		module_function :zfs
 
-		def run(cmd)
+		def self.run(cmd)
 			p cmd if $VERBOSE
 
 			r,w = IO.pipe
@@ -54,7 +97,6 @@ module Snapper
 				raise Error, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
 			end
 		end
-		module_function :run
 
 		Which = Hash.new do |hash, cmd|
 			exts = ENV['PATHEXT'] ? ENV['PATHEXT'].split(';') : ['']
@@ -71,23 +113,67 @@ module Snapper
 		end
 	end
 
+	class Commands
+		def snapshot
+		end
+
+		def list
+		end
+
+		def expire
+		end
+
+		def cron
+		end
+	end
+
 	class ZFS
 		class Dataset
-			def initialize(name, foo)
+			attr_reader :name, :properties, :snapshots
+			def initialize(name, properties, snapshots = [])
+				@name, @properties, @snapshots = name, properties, snapshots
+
+				@wanted_snapshots = []
+			end
+
+			def want_snapshot(interval)
+				@wanted_snapshots << interval
 			end
 		end
+
+		class Snapshot
+			attr_reader :dataset, :name, :properties
+			def initialize(dataset, name, properties)
+				@dataset, @name, @properties = dataset, name, properties
+				@created = Time.strptime(name.split('@', 2)[1], SnapFormat)
+			end
+
+			def expired?
+			end
+
+			def age
+			end
+		end
+
 		class << self
 			#def auto_snapshot_property()    "com.sun:auto-snapshot" end
 			def auto_snapshot_property()      "st.hur:auto-snapshot" end
 			def snapshot_intervals_property() "st.hur:snapshot-intervals" end
+			def snapshot_expire_property()    "st.hur:snapshot-expires-at" end # if you remove an autosnapshot specification, fallback to this?
 
 			def managed_datasets
 				datasets = list(type: %w(filesystem volume), properties: [snapshot_intervals_property, auto_snapshot_property])
-				datasets.select {|name,props| props[auto_snapshot_property] == 'true' }
+				datasets = datasets.select {|name,props| props[auto_snapshot_property] == 'true' }
+
+				# XXX: We may have managed snapshots on datasets without auto-snapshot set.
+				datasets = datasets.map.with_object({}) {|(name,props),ds| ds[name] = Dataset.new(name, props) }
+				managed_snapshots.each_with_object(datasets) do |(name,props),ds|
+					ds[name.split('@', 2)].tap {|dataset| dataset.snapshots << Snapshot.new(dataset, name, props) }
+				end
 			end
 
 			def managed_snapshots
-				snapshots = list(type: 'snapshot', properties: ['used',snapshot_intervals_property])
+				snapshots = list(type: 'snapshot', properties: ['used',snapshot_intervals_property,snapshot_expire_property])
 				snapshots.select {|name, props| props[snapshot_intervals_property] != '-' }
 			end
 
@@ -96,7 +182,7 @@ module Snapper
 				op = %w(list -S name -H -o)
 				op << properties.join(',')
 				op += ['-t', Array(type).join(',')] if type
-				datasets = Command.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
+				datasets = CommandRunner.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
 				Hash[datasets.map {|name,*props| [name, Hash[properties[1..-1].zip(props)]] }]
 			end
 
@@ -106,46 +192,35 @@ module Snapper
 		end
 	end
 
-	class Dataset
-		def initialize(name)
-		end
+	Periods = {
+		1           => %w(s sec secs second secondly),
+		60          => %w(m min minute minutes minutely),
+		3600        => %w(h hr hour hours hourly),
+		3600*24     => %w(d dy day days daily),
+		3600*24*7   => %w(wk week weeks weekly),
+		3600*24*31  => %w(mn mon month months monthly),
+		3600*24*356 => %w(y yr year years yearly),
+	}
 
-		def snapshots(interval=nil)
-		end
-	end
+	PeriodRE = /(?:#{Periods.values.flatten.join('|')})/i
+	PeriodMap = Periods.map.with_object({}) {|(k,v),h| v.each {|name| h[name] = k } }
+	PeriodMap.default_proc = proc {|h,k| raise ArgumentError, "Invalid period: #{k.dump}" }
 
-	def self.to_seconds(string)
-		secs = 0
-		parts = string.scan(/(\d+(?:\.\d+)?)\s*(\w*)/)
-		p parts
-		parts.each do |num, qualifier|
-			psecs = BigDecimal(num)
-			psecs *= case qualifier
-			when /\As(ec(s|onds)?)?\Z/i, nil, '' then 1
-			when /\Am(in(s|ute)?)?\Z/i then 60
-			when /\Ah(our|r)?s?\Z/i then 3600
-			when /\Ad(ay|y)?s?\Z/i then 3600*24
-			when /\Aw(eek|k)?s?\Z/i then 3600*24*7
-			when /\Am(o?n(th)?)?s?\Z/i then 3600*24*31
-			when /\Ay(year|r)s?\Z/i then 3600*24*365
-			else raise ArgumentError, "Unknown duration qualifier #{qualifier.to_s.dump}"
+	Interval = Struct.new(:raw, :seconds, :count)
+	def self.parse_intervals(string)
+		string.split(/\s*;\s*/).map do |part|
+			case part
+				# 5 weekly; 5 * weekly; weekly
+			when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\z/i
+				Interval.new(part, PeriodMap[$2.downcase], $1.empty? ? 1 : Integer($1))
+
+				# 5 * 1 week; 5 * 6 week
+			when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\z/i
+				Interval.new(part, PeriodMap[$3.downcase] * Float($2), Integer($1))
+
+			else
+				raise ArgumentError, "Unable to parse interval: #{part.dump}"
 			end
-			secs += psecs.to_i
-		end
-		secs
-	end
-
-	def self.old_to_seconds(string)
-		raise ArgumentError, "Invalid duration: #{string.dump}" unless md = /\A(\d+(?:\.\d+)?)([sSmhHdDwWMyY]?)\z/.match(string)
-		num = Float(md[1])
-		num *= case md[2]
-		when ?m   then 60
-		when /h/i then 60*60
-		when /d/i then 60*60*24
-		when /w/i then 60*60*24*7
-		when ?M   then 60*60*24*31
-		when /y/i then 60*60*24*365
-		else 1
 		end
 	end
 
@@ -153,19 +228,27 @@ module Snapper
 	}
 
 	def self.run(args)
-		while s = gets
-			p to_seconds(s) rescue p $!
-		end
-		intervals = {'15 min' => 4, '1 hour' => 24, '1 day' => 7, '1 week' => 4, '1 month' => 12}
-		intervals.each do |interval, count|
-			intervals[interval] = {count: count, seconds: to_seconds(interval), snapshots: []}
-		end
+		#intervals = {'15 min' => 4, '1 hour' => 24, '1 day' => 7, '1 week' => 4, '1 month' => 12}
+		#intervals.each do |interval, count|
+		#	intervals[interval] = {count: count, seconds: to_seconds(interval), snapshots: []}
+		#end
+		intervals = parse_intervals("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
 		pp intervals
 
-		datasets  = ZFS.managed_datasets
-		snapshots = ZFS.managed_snapshots
+		# ensure not running
+		# ..
 
-		snapshots_by_interval = 
+		datasets  = ZFS.managed_datasets
+		# snapshots = ZFS.managed_snapshots
+		datasets.each do |name, dataset|
+			intervals.each do |name, props|
+			#	dataset.snapshots.each do |name, snapshot|
+			end
+		end
+		pp datasets
+		exit
+
+
 		datasets.each do |name, props|
 			props[:snapshots] = snapshots[name] || []
 		end
