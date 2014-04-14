@@ -31,12 +31,6 @@
 #
 # - Tested.
 #
-#
-#
-#
-#
-#
-#
 
 if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 	abort("Ruby version 2.0+ is required.")
@@ -193,7 +187,7 @@ module Snapper
 	end
 
 	Periods = {
-		1           => %w(s sec secs second secondly),
+		1           => %w(s sec secs second seconds secondly),
 		60          => %w(m min minute minutes minutely),
 		3600        => %w(h hr hour hours hourly),
 		3600*24     => %w(d dy day days daily),
@@ -229,8 +223,10 @@ module Snapper
 	}
 
 	def self.run(args)
-		intervals = parse_intervals("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
-		pp intervals
+		while iv = gets.chomp
+			intervals = parse_intervals iv #("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
+			pp intervals
+		end
 
 		# ensure not running
 		# ..
