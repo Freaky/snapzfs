@@ -1,0 +1,282 @@
+#!/usr/local/bin/ruby
+#
+# snapzfs: Yet another ZFS automatic management script.
+#
+# Distinguishing features:
+#
+# - Avoids creating unnecessary snapshots:
+#   - Different snapshot classes share snapshots.
+#     e.g. tank@auto-2014-04-14.00:00Z can be an hourly, daily and weekly snapshot.
+#   - Only makes new snapshots if 'written@last-snapshot' is nonzero?
+#
+#
+#
+
+if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
+	abort("Ruby version 2.0+ is required.")
+end
+
+require 'optparse'
+require 'time'
+require 'bigdecimal'
+require 'set'
+require 'pp'
+
+module Snap
+	Now = Time.new.gmtime
+	SnapPrefix = 'auto.'
+	SnapFormat = '%F.%R' # yyyy-mm-dd.hh:mm
+
+	module CommandRunner
+		class Error < StandardError
+		end
+
+		def self.zfs(args)
+			run([Which[:zfs], *args])
+		end
+
+		def self.run(cmd)
+			p cmd if $VERBOSE
+
+			r,w = IO.pipe
+			out = IO.popen(cmd, err: w){|f| f.read }
+			w.close
+			err = r.read || ''
+			r.close
+
+			if $?.success?
+				return out || true
+			else
+				raise Error, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
+			end
+		end
+
+		Which = Hash.new do |hash, cmd|
+			exts = ENV['PATHEXT'] ? ENV['PATHEXT'].split(';') : ['']
+			ENV['PATH'].split(File::PATH_SEPARATOR).each do |path|
+				exts.each { |ext|
+					exe = File.join(path, "#{cmd}#{ext}")
+					if File.executable? exe
+						hash[cmd] = exe
+						break
+					end
+				}
+			end
+			hash[cmd]
+		end
+	end
+
+	module ZFS
+		class Dataset
+			class << self
+				def properties() @properties ||= [] end
+				def all_properties() @all_properties ||= Set.new end
+				def property(name)
+					properties << name
+					Dataset.all_properties << name
+				end
+
+				def inherited(klass)
+					properties.each {|prop| klass.property prop }
+				end
+			end
+
+			property 'name'
+			property 'type'
+			property 'used'
+			property 'st.hur:snapshot.auto'
+
+			attr_reader :properties
+
+			def name() self['name'] end
+
+			def [](key) @properties[key] end
+
+			def initialize(properties)
+				@properties = properties
+			end
+		end
+
+		class Snapshottable < Dataset
+			attr_accessor :snapshots
+
+			def initialize(*)
+				super
+				@snapshots = []
+			end
+
+			def auto_snapshot?
+				properties['st.hur:snapshot.auto'] != '-'
+			end
+
+			def auto_snapshots
+				@auto_snapshots ||= snapshots.select(&:automatic?).sort_by(&:created_at)
+			end
+
+			# XXX We want to batch these up?
+			def snapshot!(name, properties = {})
+			end
+		end
+
+		class Filesystem < Snapshottable
+			property 'mountpoint'
+		end
+
+		class Volume < Snapshottable
+		end
+
+		class Snapshot < Dataset
+			property 'st.hur:snapshot.expires_at'
+			property 'st.hur:snapshot.created_at'
+			property 'st.hur:snapshot.intervals'
+
+			def inspect
+				"#<Snapshot:#{object_id}: #{properties.inspect}>"
+			end
+
+			def automatic?
+				properties['st.hur:snapshot.created_at'] != '-'
+			end
+
+			def expires_at
+				if properties['st.hur:snapshot.expires_at'] != '-'
+					@expires_at ||= Time.at(Integer(properties['st.hur:snapshot.expires_at'])).gmtime
+				end
+			end
+
+			def created_at
+				@created_at ||= Time.at(Integer(properties['st.hur:snapshot.created_at'])).gmtime
+			end
+
+			def age
+				Now.to_i - created_at.to_i
+			end
+
+			def intervals
+				@intervals ||= Set.new(properties['st.hur:snapshot.intervals'].scan(/\d+/).map(&:to_i))
+			end
+		end
+
+		class << self
+			def list(type: %w(filesystem volume), properties: [])
+				properties = ['name', 'type', *properties]
+				op = %w(list -S name -H -o)
+				op << properties.join(',')
+				op += ['-t', Array(type).join(',')] if type
+				datasets = CommandRunner.zfs(op).lines.map {|line| line.chomp.split("\t", properties.size) }
+				datasets.map {|props| Hash[properties.zip(props)] }
+			end
+
+			def datasets
+				dsts = list(type: %w(filesystem, volume, snapshot), properties: Dataset.all_properties)
+				dsts = dsts.group_by{|ds| ds['type'] }
+				snapshottable = Hash[dsts.values_at('filesystem','volume').flatten.compact.map do |props|
+					klass = props['type'] == 'filesystem' ? Filesystem : Volume
+					[props['name'], klass.new(props)]
+				end]
+
+				dsts.fetch('snapshot', []).map {|props| Snapshot.new(props) }.each do |snapshot|
+					snapshottable[snapshot.name.split('@', 2).first].snapshots << snapshot
+				end
+				return snapshottable
+			end
+		end
+	end
+
+	Interval = Struct.new(:raw, :seconds, :count)
+	class Interval
+		Periods = {
+			1           => %w(s sec secs second seconds secondly),
+			60          => %w(m min minute minutes minutely),
+			3600        => %w(h hr hour hours hourly),
+			3600*24     => %w(d dy day days daily),
+			3600*24*7   => %w(wk week weeks weekly),
+			3600*24*14  => %w(f fort fortnight fortnightly),
+			3600*24*31  => %w(mn mon month months monthly),
+			3600*24*356 => %w(y yr year years yearly),
+		}
+
+		PeriodRE = /(?:#{Periods.values.flatten.join('|')})/i
+		PeriodMap = Periods.map.with_object({}) {|(k,v),h| v.each {|name| h[name] = k } }
+		PeriodMap.default_proc = proc {|h,k| raise ArgumentError, "Invalid period: #{k.dump}" }
+
+		def self.parse_intervals(string)
+			used_intervals = Set.new
+			intervals = string.split(/\s*;\s*/).map do |part|
+				iv = case part
+					# 5 weekly; 5 * weekly; weekly
+				when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\z/i
+					new(part, PeriodMap[$2.downcase], $1.empty? ? 1 : Integer($1))
+
+					# 5 * 1 week; 5 * 6 week
+				when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\z/i
+					new(part, (PeriodMap[$3.downcase] * Float($2)).round, Integer($1))
+
+				else
+					raise ArgumentError, "Unable to parse interval: #{part.dump}"
+				end
+				raise ArgumentError, "Duplicate interval: #{part.dump}" if used_intervals.include? iv.seconds
+				used_intervals << iv.seconds
+				iv
+			end
+		end
+
+		def cutoff
+			@cutoff ||= Now - seconds * count
+		end
+	end
+
+	def self.run
+		intervals = Interval.parse_intervals("4 * 15 minutes; 4 hourly; 2 * 12 hourly")
+
+		create_snapshots = Hash.new {|h,k| h[k] = [] }
+		destroy_snapshots = []
+
+		ZFS.datasets.each do |name, dataset|
+			if dataset.auto_snapshot?
+				puts "#{name}..."
+				snapshots = dataset.auto_snapshots
+				intervals.each do |iv|
+					snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
+					if snapshots.last.nil? or snapshots.last.age > iv.seconds
+						create_snapshots[dataset.name] << iv.seconds
+					end
+				end
+			end
+
+			dataset.auto_snapshots.each do |snapshot|
+				refs = 0
+
+				intervals.each do |iv|
+					if snapshot.intervals.include?(iv.seconds) and iv.cutoff <= snapshot.created_at
+						refs += 1
+					end
+				end
+
+				if refs.zero?
+					if !(e = snapshot.expires_at) or e < Now
+						destroy_snapshots << snapshot.name
+					end
+				end
+			end
+		end
+
+		puts "Create:"
+		by_interval = Hash.new{|h,k| h[k] = []}
+		create_snapshots.each do |name, intervals|
+			by_interval[intervals] << name
+		end
+		pp by_interval
+		by_interval.each do |intervals, names|
+			snaps = names.map {|name|[Now.strftime("#{name}@#{SnapPrefix}#{SnapFormat}"), intervals] }
+			pp snaps
+		end
+
+		#pp create_snapshots
+		puts "Destroy:"
+		pp destroy_snapshots
+	end
+end
+
+#pp Snap::ZFS.datasets
+Snap.run

@@ -1,0 +1,65 @@
+ZFS auto-snapshot spec
+======================
+
+Snapshot lifetime is specified by a list of count/interval pairs, specified like
+so:
+
+ 4 * 15 minutes; 12 hourly; 12 * 2 hourly; 4 weekly; monthly
+
+This will maintain 4 snapshots at 15 minute intervals, 12 snapshots at hourly
+intervals, 12 snapshots at 2-hour intervals, 4 snapshots at weekly intervals,
+and a single monthly snapshot.  Shorter forms are supported, e.g:
+
+ 4 * 5min; 12h; 12 * 2 hr; 4 * 1 wk; 1 * monthly
+
+Fractional periods are supported, e.g. a 12 hour interval can be specified
+as ".5 day".
+
+These are intervals, not time specifications.  Daily snapshots are not necessarily
+taken at midnight.  However, you may specify these yourself and still have them
+managed by snapzfs using a cronjob, like so:
+
+  @daily snapper auto --prefix 'daily.' --expires '1 week'
+
+This will make named snapshots for all datasets with snapshot.auto set with the
+name $dataset@daily.yyyy-mm-dd.hh:mm, set to expire in 7 days.
+
+
+Dataset properties:
+
+	st.hur:snapshot.auto=bool or string
+
+Set to true to use default specifications.   Set to a specification string to
+override for a specific dataset and its children.
+
+
+Snapshot properties:
+
+	st.hur:snapshot.expires_at timestamp      # Default expire time if not specified in interval list.
+	st.hur:snapshot.created_at timestamp      # Use our own timestamp to aid testing and parsability.
+	st.hur:snapshot.interval="900 3600 86400" # 15-minutely, hourly and daily snapshot.
+
+Snapshots with an interval specified will use the settings as specified by
+their parent dataset for that period.
+
+
+
+Commands
+========
+
+snapzfs auto
+snapzfs create --auto
+snapzfs destroy --auto
+------------
+Create new snapshots and destroy old as per their properties.
+
+
+
+snapzfs create [--prefix pfx|--name pfx.name] [--expires timespec] [--replace]
+               [[-r] dataset | --all]
+------------------------------------------------------------------------------
+Create a new snapshot either named with the timestamp and given prefix or the
+given name.  Optionally set to expire in a given time.  Optionally rename,
+create new and destroy old renamed.  Default to all auto-snapshotting datasets,
+override with specific dataset or all.
+
