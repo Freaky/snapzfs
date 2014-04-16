@@ -300,8 +300,7 @@ module Snap
 			format: '%F.%TZ',
 			verbose: false,
 			dry_run: false,
-			policy: '4 * 1 minute; 4 * 2 minute; 4 * 3 minute; 4 * 4 minute'
-			#policy: '4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
+			policy: '4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
 		}
 		def self.run(args)
 			new(args)
