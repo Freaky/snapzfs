@@ -120,8 +120,8 @@ module Snap
 			end
 
 			def policy
-				unless policy = properties['st.hur:snapshot.policy'] == '-'
-					Snapshottable.policy_cache[policy]
+				unless (policy = properties['st.hur:snapshot.policy']) == '-'
+					Snapshottable.policy_cache(policy)
 				end
 			end
 
@@ -428,8 +428,7 @@ module Snap
 					refs = 0
 
 					policy(dataset).each do |iv|
-						if snapshot.intervals.include?(iv.seconds) and
-						  (iv.cutoff(now) <= snapshot.created_at
+						if snapshot.intervals.include?(iv.seconds) and iv.cutoff(now) <= snapshot.created_at
 							refs += 1
 						end
 					end
