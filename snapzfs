@@ -321,7 +321,9 @@ module Snap
 			when 'expire' then expire args
 			when 'nuke'   then nuke args
 			when 'list'   then list args
-			when 'policy' then policy args
+			when 'policy' then cmd_policy args
+			when 'disable' then cmd_disable args
+			when 'enable' then cmd_enable args
 			else usage
 			end
 		end
@@ -334,6 +336,29 @@ module Snap
 
 		def policy(dataset)
 			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
+		end
+
+		def cmd_policy(args)
+			raise ArgumentError, "No policy specified" if args.empty?
+			spec = args.shift
+			begin
+				policy = ZFS::Snapshottable.policy_cache(spec)
+			rescue => e
+				abort("Invalid policy specification: #{e.message}")
+			else
+				policy.each do |pol|
+					puts "#{pol.raw}: #{pol.count} snapshots #{pol.seconds} (#{'%.2f' % (pol.seconds / 3600.0)} hours) apart"
+				end
+				args.each {|arg| CommandRunner.zfs(['set', "st.hur:snapshot.policy=#{spec}", arg])}
+			end
+		end
+
+		def cmd_enable(args)
+			args.each {|arg| CommandRunner.zfs(['set', 'st.hur:snapshot.auto=true', arg])}
+		end
+
+		def cmd_disable(args)
+			args.each {|arg| CommandRunner.zfs(['set', 'st.hur:snapshot.auto=false', arg])}
 		end
 
 		def managed_snapshots
