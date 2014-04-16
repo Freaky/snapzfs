@@ -405,9 +405,7 @@ module Snap
 				policy(dataset).each do |iv|
 					iv_snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
 					if iv_snapshots.empty? or iv_snapshots.last.age(now) > iv.seconds
-						unless dataset.written(snapshot.name).zero?
-							intervals << iv.seconds
-						end
+						intervals << iv.seconds
 					end
 				end
 
@@ -431,7 +429,7 @@ module Snap
 
 					policy(dataset).each do |iv|
 						if snapshot.intervals.include?(iv.seconds) and
-						  (iv.cutoff(now) <= snapshot.created_at or dataset.written(snapshot.name).zero?)
+						  (iv.cutoff(now) <= snapshot.created_at
 							refs += 1
 						end
 					end
