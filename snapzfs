@@ -361,7 +361,7 @@ module Snap
 			end
 
 			begin
-				policy = ZFS::Snapshottable.policy_cache(spec) unless spec == 'reset'
+				policy = ZFS::Snapshottable.policy_cache(spec)
 			rescue => e
 				abort("Invalid policy specification: #{e.message}")
 			else
