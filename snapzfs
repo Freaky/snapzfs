@@ -4,14 +4,14 @@
 #
 # Distinguishing features:
 #
+# - Minimal deps.  Ruby and a few bits of stdlib, that's it. Distributed as one
+#   file you can drop anywhere - nobody wants their backup system to fall over
+#   because they upgraded bundler.
 # - Avoids creating unnecessary snapshots:
 #   - Different snapshot classes share snapshots.
 #     e.g. tank@auto-2014-04-14.00:00Z can be an hourly, daily and weekly snapshot.
 #   - Delete empty snapshots.  Only create new if written@last_snapshot is nonzero?
 #     - need to update expiry time then.
-#
-#
-#
 
 if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 	abort("Ruby version 2.0+ is required.")
@@ -86,6 +86,7 @@ module Snap
 			property 'type'
 			property 'used'
 			property 'st.hur:snapshot.auto'
+			property 'st.hur:snapshot.policy'
 
 			attr_reader :properties
 
@@ -114,8 +115,19 @@ module Snap
 				@auto_snapshots ||= snapshots.select(&:automatic?).sort_by(&:created_at)
 			end
 
+			class << self
+				def policy_cache(policy) (@polices ||= {})[policy] ||= Interval.parse_intervals(policy) end
+			end
+
+			def policy
+				unless policy = properties['st.hur:snapshot.policy'] == '-'
+					Snapshottable.policy_cache[policy]
+				end
+			end
+
 			# XXX We want to batch these up?
-			def snapshot!(name, properties = {})
+			def snapshot!(snapshot_name, properties = {})
+				p "zfs snapshot #{self.name}@#{snapshot_name} with #{properties}"
 			end
 		end
 
@@ -149,8 +161,8 @@ module Snap
 				@created_at ||= Time.at(Integer(properties['st.hur:snapshot.created_at'])).gmtime
 			end
 
-			def age
-				Now.to_i - created_at.to_i
+			def age(now)
+				now.to_i - created_at.to_i
 			end
 
 			def intervals
@@ -227,41 +239,8 @@ module Snap
 		end
 	end
 
-	def self.run
-		intervals = Interval.parse_intervals("4 * 15 minutes; 4 hourly; 2 * 12 hourly")
 
-		create_snapshots = Hash.new {|h,k| h[k] = [] }
-		destroy_snapshots = []
-
-		ZFS.datasets.each do |name, dataset|
-			if dataset.auto_snapshot?
-				puts "#{name}..."
-				snapshots = dataset.auto_snapshots
-				intervals.each do |iv|
-					snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
-					if snapshots.last.nil? or snapshots.last.age > iv.seconds
-						create_snapshots[dataset.name] << iv.seconds
-					end
-				end
-			end
-
-			dataset.auto_snapshots.each do |snapshot|
-				refs = 0
-
-				intervals.each do |iv|
-					if snapshot.intervals.include?(iv.seconds) and iv.cutoff <= snapshot.created_at
-						refs += 1
-					end
-				end
-
-				if refs.zero?
-					if !(e = snapshot.expires_at) or e < Now
-						destroy_snapshots << snapshot.name
-					end
-				end
-			end
-		end
-
+	def old
 		puts "Create:"
 		by_interval = Hash.new{|h,k| h[k] = []}
 		create_snapshots.each do |name, intervals|
@@ -279,26 +258,96 @@ module Snap
 	end
 
 	class App
+		attr_reader :options
 		Defaults = {
 			prefix: 'auto.',
-			format: '%F.%R',
+			format: '%F.%RZ',
 			verbose: false,
 			dry_run: false,
-			lifetime: '4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
+			policy: '4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
 		}
 		def self.run(args)
 			new(args)
 		end
 
 		def initialize(args)
+			@all_args = args
+			args = args.dup
+
 			@now = Time.new.gmtime
 
-			case args.first
-			when 'auto'
-			when 'create'
-			when 'expire'
+			@options = Defaults.dup
+
+			case cmd = args.shift
+			when 'auto'   then auto args
+			when 'create' then create args
+			when 'expire' then expire args
+			when 'policy' then policy args
 			else usage
 			end
+		end
+
+		def d(txt = nil)
+			puts txt if $VERBOSE
+		end
+
+		def datasets() @datasets ||= ZFS.datasets end
+		def now() @now end
+
+		def policy(dataset)
+			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
+		end
+
+		def create(args)
+			create_snapshots = Hash.new {|h,k| h[k] = [] }
+			datasets.each do |name, dataset|
+				if dataset.auto_snapshot?
+					d "#{name}..."
+					snapshots = dataset.auto_snapshots
+					policy(dataset).each do |iv|
+						snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
+						if snapshots.last.nil? or snapshots.last.age(now) > iv.seconds
+							create_snapshots[dataset.name] << iv.seconds
+						end
+					end
+				end
+			end
+
+			create_snapshots.each do |name, intervals|
+				datasets[name].snapshot!("#{options[:prefix]}#{now.strftime(options[:format])}", intervals: intervals)
+			end
+		end
+
+		def expire(args)
+			destroy_snapshots = []
+
+			datasets.each do |name, dataset|
+				dataset.auto_snapshots.each do |snapshot|
+					refs = 0
+
+					policy(dataset).each do |iv|
+						if snapshot.intervals.include?(iv.seconds) and iv.cutoff <= snapshot.created_at
+							refs += 1
+						end
+					end
+
+					if refs.zero?
+						if !(e = snapshot.expires_at) or e < now
+							destroy_snapshots << snapshot.name
+						end
+					end
+				end
+			end
+
+			p "zfs destroy -d #{destroy_snapshots.join(' ')}"
+		end
+
+		def auto(args)
+			create args.dup
+			expire args
+		end
+
+		def usage
 		end
 	end
 end
