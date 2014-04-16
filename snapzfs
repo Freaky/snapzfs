@@ -271,11 +271,11 @@ module Snap
 			string.split(/\s*;\s*/).map do |part|
 				iv = case part
 					# 5 weekly; 5 * weekly; weekly
-				when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\z/i
-					new(part, PeriodMap[$2.downcase], $1.empty? ? 1 : Integer($1))
+				when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\s*\z/i
+					new(part, PeriodMap[$2.downcase], $1.nil? ? 1 : Integer($1))
 
 					# 5 * 1 week; 5 * 6 week
-				when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\z/i
+				when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\s*\z/i
 					new(part, (PeriodMap[$3.downcase] * Float($2)).round, Integer($1))
 
 				else
@@ -339,10 +339,24 @@ module Snap
 		end
 
 		def cmd_policy(args)
-			raise ArgumentError, "No policy specified" if args.empty?
+			if args.empty?
+				managed_datasets.each do |dataset|
+					puts " * #{dataset.name}: #{policy(dataset).map(&:raw).join('; ')}"
+					policy(dataset).each do |pol|
+						puts "    #{pol.raw}: #{pol.count} snapshots #{pol.seconds} (#{'%.2f' % (pol.seconds / 3600.0)} hours) apart"
+					end
+				end
+				exit 0
+			end
+
 			spec = args.shift
+			if spec == 'reset'
+				args.each {|arg| CommandRunner.zfs(['inherit', 'st.hur:snapshot.policy', arg])}
+				exit 0
+			end
+
 			begin
-				policy = ZFS::Snapshottable.policy_cache(spec)
+				policy = ZFS::Snapshottable.policy_cache(spec) unless spec == 'reset'
 			rescue => e
 				abort("Invalid policy specification: #{e.message}")
 			else
@@ -363,6 +377,10 @@ module Snap
 
 		def managed_snapshots
 			@managed_snapshots ||= datasets.values.map(&:auto_snapshots).flatten
+		end
+
+		def managed_datasets
+			@managed_datasets ||= datasets.values.select(&:auto_snapshot?)
 		end
 
 		def list(args)
@@ -398,7 +416,7 @@ module Snap
 		end
 
 		def create(args)
-			datasets.values.select(&:auto_snapshot?).each do |dataset|
+			managed_datasets.each do |dataset|
 				d "#{dataset.name}..."
 				intervals = []
 				snapshots = dataset.auto_snapshots
