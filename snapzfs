@@ -133,6 +133,10 @@ module Snap
 				props['st.hur:snapshot.expires_at'] = Integer(properties[:expires_at]) if properties[:expires_at]
 				ZFS.snapshot("#{self.name}@#{snapshot_name}", props)
 			end
+
+			def written(since)
+				Integer(ZFS.get_one(self.name, "written@#{since}"))
+			end
 		end
 
 		class Filesystem < Snapshottable
@@ -183,6 +187,13 @@ module Snap
 		end
 
 		class << self
+			def get_one(dataset, property)
+				op = %(zfs get -Hp -o value)
+				op << property
+				op << dataset
+				CommandRunner.zfs(op)
+			end
+
 			def snapshot(name, properties)
 				queued_snapshots[properties] << name
 			end
@@ -369,7 +380,9 @@ module Snap
 				policy(dataset).each do |iv|
 					iv_snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
 					if iv_snapshots.empty? or iv_snapshots.last.age(now) > iv.seconds
-						intervals << iv.seconds
+						unless dataset.written(snapshot.name).zero?
+							intervals << iv.seconds
+						end
 					end
 				end
 
@@ -392,7 +405,8 @@ module Snap
 					refs = 0
 
 					policy(dataset).each do |iv|
-						if snapshot.intervals.include?(iv.seconds) and iv.cutoff(now) <= snapshot.created_at
+						if snapshot.intervals.include?(iv.seconds) and
+						  (iv.cutoff(now) <= snapshot.created_at or dataset.written(snapshot.name).zero?)
 							refs += 1
 						end
 					end
