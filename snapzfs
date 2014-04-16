@@ -64,6 +64,10 @@ module Snap
 	end
 
 	module ZFS
+		def self.property(name)
+			"st.hur:snapshot.#{name}"
+		end
+
 		class Dataset
 			class << self
 				def properties() @properties ||= [] end
@@ -81,8 +85,8 @@ module Snap
 			property 'name'
 			property 'type'
 			property 'used'
-			property 'st.hur:snapshot.auto'
-			property 'st.hur:snapshot.policy'
+			property ZFS.property :auto
+			property ZFS.property :policy
 
 			attr_reader :properties
 
@@ -108,7 +112,7 @@ module Snap
 			end
 
 			def auto_snapshot?
-				properties['st.hur:snapshot.auto'] != '-'
+				properties[ZFS.property :auto] != '-'
 			end
 
 			def auto_snapshots
@@ -120,7 +124,7 @@ module Snap
 			end
 
 			def policy
-				unless (policy = properties['st.hur:snapshot.policy']) == '-'
+				unless (policy = properties[ZFS.property :policy]) == '-'
 					Snapshottable.policy_cache(policy)
 				end
 			end
@@ -128,9 +132,9 @@ module Snap
 			# XXX We want to batch these up?
 			def snapshot!(snapshot_name, properties = {})
 				props = {}
-				props['st.hur:snapshot.intervals'] = properties[:intervals].join(' ') if properties[:intervals]
-				props['st.hur:snapshot.created_at'] = Integer(properties[:created_at]) or raise ArgumentError, "No creation time"
-				props['st.hur:snapshot.expires_at'] = Integer(properties[:expires_at]) if properties[:expires_at]
+				props[ZFS.property :intervals] = properties[:intervals].join(' ') if properties[:intervals]
+				props[ZFS.property :created_at] = Integer(properties[:created_at]) or raise ArgumentError, "No creation time"
+				props[ZFS.property :expires_at] = Integer(properties[:expires_at]) if properties[:expires_at]
 				ZFS.snapshot("#{self.name}@#{snapshot_name}", props)
 			end
 
@@ -147,26 +151,26 @@ module Snap
 		end
 
 		class Snapshot < Dataset
-			property 'st.hur:snapshot.expires_at'
-			property 'st.hur:snapshot.created_at'
-			property 'st.hur:snapshot.intervals'
+			property ZFS.property :expires_at
+			property ZFS.property :created_at
+			property ZFS.property :intervals #TODO: this should be :policy
 
 			def inspect
 				"#<Snapshot:#{object_id}: #{properties.inspect}>"
 			end
 
 			def automatic?
-				properties['st.hur:snapshot.created_at'] != '-'
+				properties[ZFS.property :created_at] != '-'
 			end
 
 			def expires_at
-				if properties['st.hur:snapshot.expires_at'] != '-'
-					@expires_at ||= Time.at(Integer(properties['st.hur:snapshot.expires_at'])).gmtime
+				if properties[ZFS.property :expires_at] != '-'
+					@expires_at ||= Time.at(Integer(properties[ZFS.propert :expires_at])).gmtime
 				end
 			end
 
 			def created_at
-				@created_at ||= Time.at(Integer(properties['st.hur:snapshot.created_at'])).gmtime
+				@created_at ||= Time.at(Integer(properties[ZFS.property :created_at])).gmtime
 			end
 
 			def age(now)
@@ -174,7 +178,7 @@ module Snap
 			end
 
 			def intervals
-				@intervals ||= Set.new(properties['st.hur:snapshot.intervals'].scan(/\d+/).map(&:to_i))
+				@intervals ||= Set.new(properties[ZFS.property :intervals].scan(/\d+/).map(&:to_i))
 			end
 
 			def snap_name
@@ -356,7 +360,7 @@ module Snap
 
 			spec = args.shift
 			if spec == 'reset'
-				args.each {|arg| CommandRunner.zfs(['inherit', 'st.hur:snapshot.policy', arg])}
+				args.each {|arg| CommandRunner.zfs(['inherit', ZFS.property(:policy), arg])}
 				exit 0
 			end
 
@@ -368,16 +372,20 @@ module Snap
 				policy.each do |pol|
 					puts "#{pol.raw}: #{pol.count} snapshots #{pol.seconds} (#{'%.2f' % (pol.seconds / 3600.0)} hours) apart"
 				end
-				args.each {|arg| CommandRunner.zfs(['set', "st.hur:snapshot.policy=#{spec}", arg])}
+				args.each {|arg| CommandRunner.zfs(['set', "#{ZFS.property :policy}=#{spec}", arg])}
 			end
 		end
 
+		def switch(args, bool)
+			args.each {|arg| CommandRunner.zfs(['set', "#{ZFS.property :auto}=#{bool ? 'true' : 'false'}", arg])}
+		end
+
 		def cmd_enable(args)
-			args.each {|arg| CommandRunner.zfs(['set', 'st.hur:snapshot.auto=true', arg])}
+			switch(args, true)
 		end
 
 		def cmd_disable(args)
-			args.each {|arg| CommandRunner.zfs(['set', 'st.hur:snapshot.auto=false', arg])}
+			switch(args, false)
 		end
 
 		def managed_snapshots
