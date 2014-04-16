@@ -97,6 +97,10 @@ module Snap
 			def initialize(properties)
 				@properties = properties
 			end
+
+			def destroy
+				ZFS.destroy name
+			end
 		end
 
 		class Snapshottable < Dataset
@@ -127,7 +131,8 @@ module Snap
 
 			# XXX We want to batch these up?
 			def snapshot!(snapshot_name, properties = {})
-				p "zfs snapshot #{self.name}@#{snapshot_name} with #{properties}"
+				ZFS.snapshot("#{self.name}@#{snapshot_name}", 'st.hur:intervals' => properties[:intervals].join(' '))
+				#p "zfs snapshot #{self.name}@#{snapshot_name} with #{properties}"
 			end
 		end
 
@@ -171,6 +176,30 @@ module Snap
 		end
 
 		class << self
+			def snapshot(name, properties)
+				queued_snapshots[properties] << name
+			end
+
+			def destroy(name)
+				queued_destroys << name
+			end
+
+			def commit!
+				queued_snapshots.each do |properties, names|
+					cmd = %w(zfs snapshot)
+					cmd += properties.map {|name,value| ['-o', "#{name}=#{value}"] }.flatten
+					cmd += names
+					pp cmd
+				end
+				queued_snapshots.clear
+
+				pp ['zfs', 'destroy', *queued_destroys] unless queued_destroys.empty?
+				queued_destroys.clear
+			end
+
+			def queued_snapshots() @queued_snapshots ||= Hash.new{|h,k| h[k] = []} end
+			def queued_destroys() @queued_destrots ||= [] end
+
 			def list(type: %w(filesystem volume), properties: [])
 				properties = ['name', 'type', *properties]
 				op = %w(list -S name -H -o)
@@ -239,24 +268,6 @@ module Snap
 		end
 	end
 
-
-	def old
-		puts "Create:"
-		by_interval = Hash.new{|h,k| h[k] = []}
-		create_snapshots.each do |name, intervals|
-			by_interval[intervals] << name
-		end
-		pp by_interval
-		by_interval.each do |intervals, names|
-			snaps = names.map {|name|[Now.strftime("#{name}@#{SnapPrefix}#{SnapFormat}"), intervals] }
-			pp snaps
-		end
-
-		#pp create_snapshots
-		puts "Destroy:"
-		pp destroy_snapshots
-	end
-
 	class App
 		attr_reader :options
 		Defaults = {
@@ -282,6 +293,7 @@ module Snap
 			when 'auto'   then auto args
 			when 'create' then create args
 			when 'expire' then expire args
+			when 'nuke'   then nuke args
 			when 'policy' then policy args
 			else usage
 			end
@@ -296,6 +308,12 @@ module Snap
 
 		def policy(dataset)
 			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
+		end
+
+		def nuke(args)
+			STDOUT.sync = true
+			puts "WARNING: This command will destroy the following snapshots:"
+			pp datasets#.map {|ds| ds.snapshots.name }
 		end
 
 		def create(args)
@@ -313,9 +331,12 @@ module Snap
 				end
 			end
 
+			by_interval = Hash.new{|h,k| h[k] = []}
 			create_snapshots.each do |name, intervals|
 				datasets[name].snapshot!("#{options[:prefix]}#{now.strftime(options[:format])}", intervals: intervals)
 			end
+
+			ZFS.commit!
 		end
 
 		def expire(args)
@@ -333,13 +354,13 @@ module Snap
 
 					if refs.zero?
 						if !(e = snapshot.expires_at) or e < now
-							destroy_snapshots << snapshot.name
+							ZFS.destroy(snapshot.name)
 						end
 					end
 				end
 			end
 
-			p "zfs destroy -d #{destroy_snapshots.join(' ')}"
+			ZFS.commit!
 		end
 
 		def auto(args)
