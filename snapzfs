@@ -7,7 +7,8 @@
 # - Avoids creating unnecessary snapshots:
 #   - Different snapshot classes share snapshots.
 #     e.g. tank@auto-2014-04-14.00:00Z can be an hourly, daily and weekly snapshot.
-#   - Only makes new snapshots if 'written@last-snapshot' is nonzero?
+#   - Delete empty snapshots.  Only create new if written@last_snapshot is nonzero?
+#     - need to update expiry time then.
 #
 #
 #
@@ -16,11 +17,11 @@ if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 	abort("Ruby version 2.0+ is required.")
 end
 
-require 'optparse'
-require 'time'
 require 'bigdecimal'
-require 'set'
+require 'optparse'
 require 'pp'
+require 'set'
+require 'time'
 
 module Snap
 	Now = Time.new.gmtime
@@ -276,7 +277,31 @@ module Snap
 		puts "Destroy:"
 		pp destroy_snapshots
 	end
+
+	class App
+		Defaults = {
+			prefix: 'auto.',
+			format: '%F.%R',
+			verbose: false,
+			dry_run: false,
+			lifetime: '4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
+		}
+		def self.run(args)
+			new(args)
+		end
+
+		def initialize(args)
+			@now = Time.new.gmtime
+
+			case args.first
+			when 'auto'
+			when 'create'
+			when 'expire'
+			else usage
+			end
+		end
+	end
 end
 
 #pp Snap::ZFS.datasets
-Snap.run
+Snap::App.run(ARGV)

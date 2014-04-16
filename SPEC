@@ -19,7 +19,8 @@ These are intervals, not time specifications.  Daily snapshots are not necessari
 taken at midnight.  However, you may specify these yourself and still have them
 managed by snapzfs using a cronjob, like so:
 
-  @daily snapper auto --prefix 'daily.' --expires '1 week'
+  @daily snapzfs create --prefix 'daily.' --expires '1 week'
+  @daily snapzfs create --name 'foo' --replace --expires '1 week'
 
 This will make named snapshots for all datasets with snapshot.auto set with the
 name $dataset@daily.yyyy-mm-dd.hh:mm, set to expire in 7 days.
@@ -49,13 +50,13 @@ Commands
 
 snapzfs auto
 snapzfs create --auto
-snapzfs destroy --auto
+snapzfs expire
 ------------
 Create new snapshots and destroy old as per their properties.
 
 
 
-snapzfs create [--prefix pfx|--name pfx.name] [--expires timespec] [--replace]
+snapzfs create [--prefix pfx|--name name] [--expires timespec] [--replace]
                [[-r] dataset | --all]
 ------------------------------------------------------------------------------
 Create a new snapshot either named with the timestamp and given prefix or the

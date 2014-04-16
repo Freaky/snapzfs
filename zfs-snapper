@@ -107,22 +107,9 @@ module Snapper
 		end
 	end
 
-	class Commands
-		def snapshot
-		end
-
-		def list
-		end
-
-		def expire
-		end
-
-		def cron
-		end
-	end
-
 	class ZFS
 		class Dataset
+			Properties = %w(auto).map {|p| "hur.st:snapshot.#{p}" }
 			attr_reader :name, :properties, :snapshots
 			def initialize(name, properties, snapshots = [])
 				@name, @properties, @snapshots = name, properties, snapshots
@@ -136,6 +123,7 @@ module Snapper
 		end
 
 		class Snapshot
+			Properties = %w(expires_at intervals).map {|p| "hur.st:snapshot.#{p}" }
 			attr_reader :dataset, :name, :properties
 			def initialize(dataset, name, properties)
 				@dataset, @name, @properties = dataset, name, properties
@@ -151,9 +139,12 @@ module Snapper
 
 		class << self
 			#def auto_snapshot_property()    "com.sun:auto-snapshot" end
+			def property_namespace()          "st.hur:snapshot" end
 			def auto_snapshot_property()      "st.hur:auto-snapshot" end
 			def snapshot_intervals_property() "st.hur:snapshot-intervals" end
 			def snapshot_expire_property()    "st.hur:snapshot-expires-at" end # if you remove an autosnapshot specification, fallback to this?
+
+			def property(name) "st.hur:snapshot." << name end
 
 			def managed_datasets
 				datasets = list(type: %w(filesystem volume), properties: [snapshot_intervals_property, auto_snapshot_property])
@@ -171,6 +162,12 @@ module Snapper
 				snapshots.select {|name, props| props[snapshot_intervals_property] != '-' }
 			end
 
+			def datasets
+				dsts = list(type: %w(filesystem volume snapshot), properties: ['used',*Dataset::Properties,*Snapshot::Properties])
+				snapshots, filesystems, volumes = dsts.group_by {|name,props| props['type'] }.values_at('snapshot', 'filesystem', 'volume')
+				dsts.group_by {|name,props| props['type'] }
+			end
+
 			def list(type: %w(filesystem volume), properties: %w())
 				properties = ['name', 'type', *properties]
 				op = %w(list -S name -H -o)
@@ -186,35 +183,37 @@ module Snapper
 		end
 	end
 
-	Periods = {
-		1           => %w(s sec secs second seconds secondly),
-		60          => %w(m min minute minutes minutely),
-		3600        => %w(h hr hour hours hourly),
-		3600*24     => %w(d dy day days daily),
-		3600*24*7   => %w(wk week weeks weekly),
-		3600*24*14  => %w(f fort fortnight fortnightly),
-		3600*24*31  => %w(mn mon month months monthly),
-		3600*24*356 => %w(y yr year years yearly),
-	}
-
-	PeriodRE = /(?:#{Periods.values.flatten.join('|')})/i
-	PeriodMap = Periods.map.with_object({}) {|(k,v),h| v.each {|name| h[name] = k } }
-	PeriodMap.default_proc = proc {|h,k| raise ArgumentError, "Invalid period: #{k.dump}" }
-
 	Interval = Struct.new(:raw, :seconds, :count)
-	def self.parse_intervals(string)
-		string.split(/\s*;\s*/).map do |part|
-			case part
-				# 5 weekly; 5 * weekly; weekly
-			when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\z/i
-				Interval.new(part, PeriodMap[$2.downcase], $1.empty? ? 1 : Integer($1))
+	class Interval
+		Periods = {
+			1           => %w(s sec secs second seconds secondly),
+			60          => %w(m min minute minutes minutely),
+			3600        => %w(h hr hour hours hourly),
+			3600*24     => %w(d dy day days daily),
+			3600*24*7   => %w(wk week weeks weekly),
+			3600*24*14  => %w(f fort fortnight fortnightly),
+			3600*24*31  => %w(mn mon month months monthly),
+			3600*24*356 => %w(y yr year years yearly),
+		}
 
-				# 5 * 1 week; 5 * 6 week
-			when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\z/i
-				Interval.new(part, PeriodMap[$3.downcase] * Float($2), Integer($1))
+		PeriodRE = /(?:#{Periods.values.flatten.join('|')})/i
+		PeriodMap = Periods.map.with_object({}) {|(k,v),h| v.each {|name| h[name] = k } }
+		PeriodMap.default_proc = proc {|h,k| raise ArgumentError, "Invalid period: #{k.dump}" }
 
-			else
-				raise ArgumentError, "Unable to parse interval: #{part.dump}"
+		def self.parse_intervals(string)
+			string.split(/\s*;\s*/).map do |part|
+				case part
+					# 5 weekly; 5 * weekly; weekly
+				when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\z/i
+					new(part, PeriodMap[$2.downcase], $1.empty? ? 1 : Integer($1))
+
+					# 5 * 1 week; 5 * 6 week
+				when /\A(\d+)\s*\*\s*(\d+(?:\.\d+)?)\s*(#{PeriodRE})\z/i
+					new(part, PeriodMap[$3.downcase] * Float($2), Integer($1))
+
+				else
+					raise ArgumentError, "Unable to parse interval: #{part.dump}"
+				end
 			end
 		end
 	end
@@ -224,7 +223,7 @@ module Snapper
 
 	def self.run(args)
 		while iv = gets.chomp
-			intervals = parse_intervals iv #("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
+			intervals = Interval.parse_intervals iv #("4 * 15 minutely; 24 hourly; 7 daily; 4 weekly; 4 * monthly")
 			pp intervals
 		end
 
