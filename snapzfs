@@ -2,7 +2,7 @@
 #
 # snapzfs: Yet another ZFS automatic management script.
 #
-# Distinguishing features:
+# Distinguishing features?
 #
 # - Minimal deps.  Ruby and a few bits of stdlib, that's it. Distributed as one
 #   file you can drop anywhere - nobody wants their backup system to fall over
@@ -24,10 +24,6 @@ require 'set'
 require 'time'
 
 module Snap
-	Now = Time.new.gmtime
-	SnapPrefix = 'auto.'
-	SnapFormat = '%F.%R' # yyyy-mm-dd.hh:mm
-
 	module CommandRunner
 		class Error < StandardError
 		end
@@ -280,19 +276,21 @@ module Snap
 			end
 		end
 
-		def cutoff
-			@cutoff ||= Now - seconds * count
+		def cutoff(now)
+			@cutoff ||= now - seconds * count
 		end
 	end
 
 	class App
-		attr_reader :options
+		attr_reader :options, :now
+
 		Defaults = {
 			prefix: 'auto.',
-			format: '%F.%RZ',
+			format: '%F.%TZ',
 			verbose: false,
 			dry_run: false,
-			policy: '1 * 0 seconds; 3 * 10 seconds; 4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
+			policy: '4 * 1 minute; 4 * 2 minute; 4 * 3 minute; 4 * 4 minute'
+			#policy: '4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
 		}
 		def self.run(args)
 			new(args)
@@ -311,7 +309,7 @@ module Snap
 			when 'create' then create args
 			when 'expire' then expire args
 			when 'nuke'   then nuke args
-			when 'snapshots' then snapshots args
+			when 'list'   then list args
 			when 'policy' then policy args
 			else usage
 			end
@@ -322,17 +320,16 @@ module Snap
 		end
 
 		def datasets() @datasets ||= ZFS.datasets end
-		def now() @now end
 
 		def policy(dataset)
 			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
 		end
 
 		def managed_snapshots
-			@managed_snapshots ||= datasets.map(&:auto_snapshots).flatten
+			@managed_snapshots ||= datasets.values.map(&:auto_snapshots).flatten
 		end
 
-		def snapshots(args)
+		def list(args)
 			managed_snapshots.each {|snapshot| puts snapshot.name }
 		end
 
@@ -365,16 +362,14 @@ module Snap
 		end
 
 		def create(args)
-			datasets.each do |name, dataset|
+			datasets.values.select(&:auto_snapshot?).each do |dataset|
+				d "#{dataset.name}..."
 				intervals = []
-				if dataset.auto_snapshot?
-					d "#{name}..."
-					snapshots = dataset.auto_snapshots
-					policy(dataset).each do |iv|
-						snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
-						if snapshots.empty? or snapshots.last.age(now) > iv.seconds
-							intervals << iv.seconds
-						end
+				snapshots = dataset.auto_snapshots
+				policy(dataset).each do |iv|
+					iv_snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
+					if iv_snapshots.empty? or iv_snapshots.last.age(now) > iv.seconds
+						intervals << iv.seconds
 					end
 				end
 
@@ -397,7 +392,7 @@ module Snap
 					refs = 0
 
 					policy(dataset).each do |iv|
-						if snapshot.intervals.include?(iv.seconds) and iv.cutoff <= snapshot.created_at
+						if snapshot.intervals.include?(iv.seconds) and iv.cutoff(now) <= snapshot.created_at
 							refs += 1
 						end
 					end
@@ -415,7 +410,7 @@ module Snap
 
 		def auto(args)
 			create args.dup
-			expire args
+			expire args.dup
 		end
 
 		def usage
