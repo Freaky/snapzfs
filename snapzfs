@@ -207,16 +207,22 @@ module Snap
 					op = %w(snapshot)
 					op += properties.map {|name,value| ['-o', "#{name}=#{value}"] }.flatten
 					op += names
-					pp op
-					CommandRunner.zfs(op)
+					if $dry
+						pp op
+					else
+						CommandRunner.zfs(op)
+					end
 				end
 				queued_snapshots.clear
 
 				queued_destroys.group_by(&:snapshot_of).each do |dataset,snapshots|
 					op = %w(destroy)
 					op += ["#{dataset}@#{snapshots.map(&:snap_name).join(',')}"]
-					pp op
-					CommandRunner.zfs(op)
+					if $dry
+						pp op
+					else
+						CommandRunner.zfs(op)
+					end
 				end
 				queued_destroys.clear
 			end
