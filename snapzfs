@@ -1,4 +1,4 @@
-#!/usr/local/bin/ruby -w
+#!/usr/local/bin/ruby
 #
 # snapzfs: Yet another ZFS automatic management script.
 #
@@ -136,7 +136,7 @@ module Snap
 
 			def snapshot!(snapshot_name, properties = {})
 				props = {}
-				props[ZFS.property :intervals] = properties[:intervals].join(' ') if properties[:intervals]
+				props[ZFS.property :policies] = properties[:policies].join(' ') if properties[:policies]
 				props[ZFS.property :created_at] = Integer(properties[:created_at]) or raise ArgumentError, "No creation time"
 				props[ZFS.property :expires_at] = Integer(properties[:expires_at]) if properties[:expires_at]
 				ZFS.snapshot("#{self.name}@#{snapshot_name}", props)
@@ -157,7 +157,7 @@ module Snap
 		class Snapshot < Dataset
 			property ZFS.property :expires_at
 			property ZFS.property :created_at
-			property ZFS.property :intervals #TODO: this should be :policies
+			property ZFS.property :policies
 
 			def inspect
 				"#<Snapshot:#{object_id}: #{properties.inspect}>"
@@ -181,7 +181,7 @@ module Snap
 				now.to_i - created_at.to_i
 			end
 
-			def intervals
+			def policies
 				@intervals ||= Set.new(properties[ZFS.property :intervals].scan(/\d+/).map(&:to_i))
 			end
 
@@ -403,7 +403,7 @@ module Snap
 		end
 
 		def list(args)
-			managed_snapshots.each {|snapshot| puts snapshot.name }
+			print CommandRunner.zfs(['list', *args, *managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten])
 		end
 
 		def nuke(args)
