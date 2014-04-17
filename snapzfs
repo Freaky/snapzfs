@@ -1,19 +1,7 @@
 #!/usr/local/bin/ruby
 #
-# snapzfs: Yet another ZFS automatic management script.
+# snapzfs: Yet another ZFS automatic snapshot management script.
 #
-# Distinguishing features?
-#
-# - Minimal deps.  Ruby and a few bits of stdlib, that's it. Distributed as one
-#   file you can drop anywhere - nobody wants their backup system to fall over
-#   because they upgraded bundler.
-# - Uses ZFS user properties extensively.
-# - Avoids creating unnecessary snapshots:
-#   - Different snapshot classes share snapshots.
-#     e.g. tank@auto-2014-04-14.00:00Z can be an hourly, daily and weekly snapshot.
-#   - Delete empty snapshots.
-#     - Only create new if written@last_snapshot is nonzero?
-#       need to update expiry time then. Probably not worth it.
 
 if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 	abort("Ruby version 2.0+ is required.")
@@ -183,8 +171,8 @@ module Snap
 			end
 
 			def expires_at
-				if properties[ZFS.property :expires_at] != '-'
-					@expires_at ||= Time.at(Integer(properties[ZFS.propert :expires_at])).gmtime
+				if (prop = properties[ZFS.property :expires_at]) != '-'
+					@expires_at ||= Time.at(Integer(prop)).gmtime
 				end
 			end
 
@@ -344,15 +332,15 @@ module Snap
 			@options = Defaults.dup
 
 			case args.shift
-			when 'auto'   then auto args
-			when 'create' then create args
-			when 'expire' then expire args
-			when 'nuke'   then nuke args
-			when 'list'   then list args
-			when 'policy' then cmd_policy args
+			when 'auto'    then cmd_auto args
+			when 'create'  then cmd_create args
+			when 'expire'  then cmd_expire args
+			when 'nuke'    then cmd_nuke args
+			when 'list'    then cmd_list args
+			when 'policy'  then cmd_policy args
 			when 'disable' then cmd_disable args
-			when 'enable' then cmd_enable args
-			when 'clean' then clear_empty_snapshots args
+			when 'enable'  then cmd_enable args
+			when 'clean'   then cmd_clean args
 			else usage
 			end
 		end
@@ -417,13 +405,11 @@ module Snap
 			@managed_datasets ||= datasets.values.select(&:auto_snapshot?)
 		end
 
-		def list(args)
-			#print CommandRunner.zfs(['list', *args, *managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten])
+		def cmd_list(args)
 			print CommandRunner.xargs(:zfs, args: ['list', *args], items: managed_snapshots.map(&:name))
-			#                          items: managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten)
 		end
 
-		def nuke(args)
+		def cmd_nuke(args)
 			unless STDOUT.tty?
 				puts "Nuke command is strictly interactive-only."
 			end
@@ -451,7 +437,7 @@ module Snap
 			@name ||= "#{options[:prefix]}#{now.strftime(options[:format])}"
 		end
 
-		def create(args)
+		def cmd_create(args)
 			managed_datasets.each do |dataset|
 				d "#{dataset.name}..."
 				policies = []
@@ -476,7 +462,7 @@ module Snap
 			ZFS.commit!
 		end
 
-		def expire(args)
+		def cmd_expire(args)
 			datasets.each do |name, dataset|
 				dataset.auto_snapshots.each do |snapshot|
 					refs = 0
@@ -498,7 +484,7 @@ module Snap
 			ZFS.commit!
 		end
 
-		def clear_empty_snapshots(args)
+		def cmd_clean(args)
 			datasets_refresh.each do |name, dataset|
 				dataset.auto_snapshots.group_by(&:policies).each do |pol, snapshots|
 					next if snapshots.size < 2
@@ -512,12 +498,65 @@ module Snap
 			ZFS.commit!
 		end
 
-		def auto(args)
-			create args.dup
-			expire args.dup
+		def cmd_auto(args)
+			cmd_create args.dup
+			cmd_expire args.dup
+			cmd_clean args.dup
 		end
 
 		def usage
+			puts <<EOC
+snapzfs: Yet another stupid and probably broken ZFS rolling snapshot script you
+         probably shouldn't use.
+
+#{$0} [create | expire]
+  Creates or destroys snapshots according to the policy for each dataset.
+
+#{$0} clean
+  Destroys old empty snapshots.
+
+#{$0} auto
+  Creates, expires and cleans snapshots.
+
+#{$0} list
+  Lists any managed snapshots, if any. Passes flags through to zfs list.
+
+#{$0} policy
+  Lists policies for managed datasets.
+
+#{$0} policy [policy] [dataset[ dataset ..]]
+  Parses the specified property. If datasets are specified and the policy is
+  successfully parsed, sets the policy for those datasets.
+
+#{$0} [enable | disable] [dataset[ dataset ..]]
+  Enables or disables automatic snapshot creation for the dataset, without changing
+  its configured policy.  Note existing snapshots will continue to be expired.
+
+#{$0} nuke
+  Destroys all managed snapshots after a written confirmation.
+
+
+Policies:
+  Policies are strings describing snapshot creation regularity and the number
+  of those snapshots to keep, separated by semicolons.  In future they will
+  include specific times and dates, like "4 midnightly" and "start of month".
+  Maybe.
+
+  Examples:
+
+    4 hourly; 7 daily; 4 weekly; 3 monthly
+
+  Keeps 4 snapshots at hourly intervals, 7 at 24 hour intervals, 4 at 7 day
+  intervals and 3 at 31 day intervals.  Note these are dated from the first time
+  the snapshots are created, *not* by the absolute date or time.  If you start
+  the script at 13:30, your hourly snapshots will be at 13:30, 14:30, 15:30 and
+  so (assuming the script is actually executed).  If after the first snapshot
+  you wait 90 minutes, the next hourly snapshot will be at 15:00.
+
+    4 * 3 hourly
+
+  Keep 4 snapshots at 3-hour intervals.
+EOC
 		end
 	end
 end
