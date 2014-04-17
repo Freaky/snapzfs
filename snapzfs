@@ -7,11 +7,13 @@
 # - Minimal deps.  Ruby and a few bits of stdlib, that's it. Distributed as one
 #   file you can drop anywhere - nobody wants their backup system to fall over
 #   because they upgraded bundler.
+# - Uses ZFS user properties extensively.
 # - Avoids creating unnecessary snapshots:
 #   - Different snapshot classes share snapshots.
 #     e.g. tank@auto-2014-04-14.00:00Z can be an hourly, daily and weekly snapshot.
-#   - Delete empty snapshots.  Only create new if written@last_snapshot is nonzero?
-#     - need to update expiry time then.
+#   - Delete empty snapshots.
+#     - Only create new if written@last_snapshot is nonzero?
+#       need to update expiry time then. Probably not worth it.
 
 if RUBY_VERSION.split(".").map(&:to_i)[0] < 2
 	abort("Ruby version 2.0+ is required.")
@@ -481,15 +483,17 @@ module Snap
 		end
 
 		def clear_empty_snapshots(args)
-			# XXX: must be made aware of policies.
 			datasets_refresh.each do |name, dataset|
-				snapshots = dataset.auto_snapshots
-				next if snapshots.size < 2
-				pp snapshots.map(&:created_at)
-				snapshots[0..-2].select {|snapshot| snapshot.used.zero? }.each do |snapshot|
-					puts "empty: #{snapshot.name}"
+				dataset.auto_snapshots.group_by(&:intervals).each do |iv, snapshots|
+					next if snapshots.size < 2
+					snapshots[0..-2].select {|snapshot| snapshot.used.zero? }.each do |snapshot|
+						d "empty: #{snapshot.name}"
+						snapshot.destroy!
+					end
 				end
 			end
+
+			ZFS.commit!
 		end
 
 		def auto(args)
