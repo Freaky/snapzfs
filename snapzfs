@@ -134,7 +134,6 @@ module Snap
 				end
 			end
 
-			# XXX We want to batch these up?
 			def snapshot!(snapshot_name, properties = {})
 				props = {}
 				props[ZFS.property :intervals] = properties[:intervals].join(' ') if properties[:intervals]
@@ -506,5 +505,4 @@ module Snap
 	end
 end
 
-#pp Snap::ZFS.datasets
 Snap::App.run(ARGV)
