@@ -39,8 +39,23 @@ module Snap
 		def self.run(cmd)
 			p cmd if $VERBOSE
 
+			self.popen(cmd)
+		end
+
+		def self.xargs(cmd, args: [], items: [], xargs: [])
+			cmd = [Which[:xargs], '-0', *xargs, Which[cmd], *args]
+			p cmd if $VERBOSE
+
+			self.popen(cmd) {|f| f.write(items.join("\000"))}
+		end
+
+		def self.popen(*args, &block)
 			r,w = IO.pipe
-			out = IO.popen(cmd, err: w){|f| f.read }
+			out = IO.popen(*args, 'a+', err: w) do |f|
+				block.call(f) if block
+				f.close_write
+				f.read
+			end
 			w.close
 			err = r.read || ''
 			r.close
@@ -125,7 +140,7 @@ module Snap
 			end
 
 			class << self
-				def policy_cache(policy) (@polices ||= {})[policy] ||= Interval.parse_intervals(policy) end
+				def policy_cache(policy) (@polices ||= {})[policy] ||= Policy.parse_policies(policy) end
 			end
 
 			def policy
@@ -182,7 +197,7 @@ module Snap
 			end
 
 			def policies
-				@intervals ||= Set.new(properties[ZFS.property :intervals].scan(/\d+/).map(&:to_i))
+				@policies ||= Set.new(properties[ZFS.property :policies].scan(/\d+/).map(&:to_i))
 			end
 
 			def snap_name
@@ -214,11 +229,11 @@ module Snap
 				queued_snapshots.each do |properties, names|
 					op = %w(snapshot)
 					op += properties.map {|name,value| ['-o', "#{name}=#{value}"] }.flatten
-					op += names
+					#op += names
 					if $dry
 						pp op
 					else
-						CommandRunner.zfs(op)
+						CommandRunner.xargs(:zfs, args: op, items: names)
 					end
 				end
 				queued_snapshots.clear
@@ -263,8 +278,8 @@ module Snap
 		end
 	end
 
-	Interval = Struct.new(:raw, :seconds, :count)
-	class Interval # Rename Policy, support "midnight", "end of day", "start of month" etc?
+	Policy = Struct.new(:raw, :seconds, :count)
+	class Policy # Rename Policy, support "midnight", "end of day", "start of month" etc?
 		Periods = {
 			1           => %w(s sec secs second seconds secondly),
 			60          => %w(m min minute minutes minutely),
@@ -280,10 +295,10 @@ module Snap
 		PeriodMap = Periods.map.with_object({}) {|(k,v),h| v.each {|name| h[name] = k } }
 		PeriodMap.default_proc = proc {|h,k| raise ArgumentError, "Invalid period: #{k.dump}" }
 
-		def self.parse_intervals(string)
-			used_intervals = Set.new
+		def self.parse_policies(string)
+			used_policies = Set.new
 			string.split(/\s*;\s*/).map do |part|
-				iv = case part
+				pol = case part
 					# 5 weekly; 5 * weekly; weekly
 				when /\A(\d+)?\s*\*?\s*(#{PeriodRE})\s*\z/i
 					new(part, PeriodMap[$2.downcase], $1.nil? ? 1 : Integer($1))
@@ -295,9 +310,9 @@ module Snap
 				else
 					raise ArgumentError, "Unable to parse interval: #{part.dump}"
 				end
-				raise ArgumentError, "Duplicate interval: #{part.dump}" if used_intervals.include? iv.seconds
-				used_intervals << iv.seconds
-				iv
+				raise ArgumentError, "Duplicate interval: #{part.dump}" if used_policies.include? pol.seconds
+				used_policies << pol.seconds
+				pol
 			end
 		end
 
@@ -403,7 +418,9 @@ module Snap
 		end
 
 		def list(args)
-			print CommandRunner.zfs(['list', *args, *managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten])
+			#print CommandRunner.zfs(['list', *args, *managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten])
+			print CommandRunner.xargs(:zfs, args: ['list', *args], items: managed_snapshots.map(&:name))
+			#                          items: managed_datasets.map {|ds| [ds.name, ds.auto_snapshots.map(&:name)]}.flatten)
 		end
 
 		def nuke(args)
@@ -437,22 +454,22 @@ module Snap
 		def create(args)
 			managed_datasets.each do |dataset|
 				d "#{dataset.name}..."
-				intervals = []
+				policies = []
 				snapshots = dataset.auto_snapshots
-				policy(dataset).each do |iv|
-					iv_snapshots = snapshots.select {|snapshot| snapshot.intervals.include? iv.seconds }
-					if iv_snapshots.empty? or iv_snapshots.last.age(now) > iv.seconds
-						intervals << iv.seconds
+				policy(dataset).each do |pol|
+					pol_snapshots = snapshots.select {|snapshot| snapshot.policies.include? pol.seconds }
+					if pol_snapshots.empty? or pol_snapshots.last.age(now) > pol.seconds
+						policies << pol.seconds
 					end
 				end
 
 				extra = nil
-				unless intervals.empty?
+				unless policies.empty?
 					while dataset.snapshots.any? {|snapshot| snapshot.snap_name == (snap_name + extra.to_s) }
 						extra ||= '.0'
 						extra.succ!
 					end
-					dataset.snapshot!(snap_name + extra.to_s, intervals: intervals, created_at: now)
+					dataset.snapshot!(snap_name + extra.to_s, policies: policies, created_at: now)
 				end
 			end
 
@@ -464,8 +481,8 @@ module Snap
 				dataset.auto_snapshots.each do |snapshot|
 					refs = 0
 
-					policy(dataset).each do |iv|
-						if snapshot.intervals.include?(iv.seconds) and iv.cutoff(now) <= snapshot.created_at
+					policy(dataset).each do |pol|
+						if snapshot.intervals.include?(pol.seconds) and pol.cutoff(now) <= snapshot.created_at
 							refs += 1
 						end
 					end
@@ -483,7 +500,7 @@ module Snap
 
 		def clear_empty_snapshots(args)
 			datasets_refresh.each do |name, dataset|
-				dataset.auto_snapshots.group_by(&:intervals).each do |iv, snapshots|
+				dataset.auto_snapshots.group_by(&:policies).each do |pol, snapshots|
 					next if snapshots.size < 2
 					snapshots[0..-2].select {|snapshot| snapshot.used.zero? }.each do |snapshot|
 						d "empty: #{snapshot.name}"
