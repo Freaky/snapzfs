@@ -23,6 +23,8 @@ require 'pp'
 require 'set'
 require 'time'
 
+$dry = false
+
 module Snap
 	module CommandRunner
 		class Error < StandardError
@@ -91,6 +93,7 @@ module Snap
 			attr_reader :properties
 
 			def name() self['name'] end
+			def used() Integer(self['used']) end
 
 			def [](key) @properties[key] end
 
@@ -153,7 +156,7 @@ module Snap
 		class Snapshot < Dataset
 			property ZFS.property :expires_at
 			property ZFS.property :created_at
-			property ZFS.property :intervals #TODO: this should be :policy
+			property ZFS.property :intervals #TODO: this should be :policies
 
 			def inspect
 				"#<Snapshot:#{object_id}: #{properties.inspect}>"
@@ -260,7 +263,7 @@ module Snap
 	end
 
 	Interval = Struct.new(:raw, :seconds, :count)
-	class Interval
+	class Interval # Rename Policy, support "midnight", "end of day", "start of month" etc?
 		Periods = {
 			1           => %w(s sec secs second seconds secondly),
 			60          => %w(m min minute minutes minutely),
@@ -333,6 +336,7 @@ module Snap
 			when 'policy' then cmd_policy args
 			when 'disable' then cmd_disable args
 			when 'enable' then cmd_enable args
+			when 'clean' then clear_empty_snapshots args
 			else usage
 			end
 		end
@@ -342,6 +346,7 @@ module Snap
 		end
 
 		def datasets() @datasets ||= ZFS.datasets end
+		def datasets_refresh() @datasets = ZFS.datasets end
 
 		def policy(dataset)
 			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
@@ -473,6 +478,18 @@ module Snap
 			end
 
 			ZFS.commit!
+		end
+
+		def clear_empty_snapshots(args)
+			# XXX: must be made aware of policies.
+			datasets_refresh.each do |name, dataset|
+				snapshots = dataset.auto_snapshots
+				next if snapshots.size < 2
+				pp snapshots.map(&:created_at)
+				snapshots[0..-2].select {|snapshot| snapshot.used.zero? }.each do |snapshot|
+					puts "empty: #{snapshot.name}"
+				end
+			end
 		end
 
 		def auto(args)
