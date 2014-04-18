@@ -406,6 +406,7 @@ module Snap
 		end
 
 		def cmd_list(args)
+			exit if managed_snapshots.empty?
 			print CommandRunner.xargs(:zfs, args: ['list', *args], items: managed_snapshots.map(&:name))
 		end
 
