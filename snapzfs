@@ -219,7 +219,7 @@ module Snap
 					op += properties.map {|name,value| ['-o', "#{name}=#{value}"] }.flatten
 					#op += names
 					if $dry
-						pp op
+						pp [op, names]
 					else
 						CommandRunner.xargs(:zfs, args: op, items: names)
 					end
