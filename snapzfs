@@ -469,7 +469,7 @@ module Snap
 					refs = 0
 
 					policy(dataset).each do |pol|
-						if snapshot.intervals.include?(pol.seconds) and pol.cutoff(now) <= snapshot.created_at
+						if snapshot.policies.include?(pol.seconds) and pol.cutoff(now) <= snapshot.created_at
 							refs += 1
 						end
 					end
