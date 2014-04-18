@@ -37,9 +37,9 @@ module Snap
 			self.popen(cmd) {|f| f.write(items.join("\000"))}
 		end
 
-		def self.popen(*args, &block)
+		def self.popen(*cmd, &block)
 			r,w = IO.pipe
-			out = IO.popen(*args, 'a+', err: w) do |f|
+			out = IO.popen(*cmd, 'a+', err: w) do |f|
 				block.call(f) if block
 				f.close_write
 				f.read
