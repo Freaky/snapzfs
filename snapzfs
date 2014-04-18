@@ -412,7 +412,7 @@ module Snap
 
 		def cmd_nuke(args)
 			unless STDOUT.tty?
-				puts "Nuke command is strictly interactive-only."
+				abort("Nuke command is strictly interactive-only.")
 			end
 
 			STDOUT.sync = true
