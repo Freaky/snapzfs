@@ -246,7 +246,7 @@ module Snap
 				queued_snapshots.clear
 
 				queued_destroys.group_by(&:snapshot_of).each do |dataset,snapshots|
-					op = %w(destroy)
+					op = %w(destroy -d)
 					op += ["#{dataset}@#{snapshots.map(&:snap_name).join(',')}"]
 					if $dry
 						pp op
