@@ -112,7 +112,12 @@ module Snap
 			attr_reader :properties
 
 			def name() self['name'] end
-			def used() Integer(self['used']) end
+
+			# XXX: would prefer to use list -p, but not available on Linux atm.
+			# For the time being I only care if this is zero, so allow us to turn "104k" into 104.
+			def used() self['used'].to_i end
+
+			def used?() !used.zero? end
 
 			def [](key) @properties[key] end
 
@@ -509,7 +514,7 @@ module Snap
 			datasets_refresh.each do |name, dataset|
 				dataset.auto_snapshots.group_by(&:policies).each do |pol, snapshots|
 					next if snapshots.size < 2
-					snapshots[0..-2].select {|snapshot| snapshot.used.zero? }.each do |snapshot|
+					snapshots[0..-2].reject(&:used?).each do |snapshot|
 						d "empty: #{snapshot.name}"
 						snapshot.destroy!
 					end
