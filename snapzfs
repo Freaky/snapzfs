@@ -76,7 +76,11 @@ module Snap
 					end
 				}
 			end
-			hash[cmd]
+			if hash.key?(cmd)
+				hash[cmd]
+			else
+				raise Error, "#{cmd} not found in #{ENV['PATH']}"
+			end
 		end
 	end
 
@@ -340,6 +344,12 @@ module Snap
 			@now = Time.new.gmtime
 
 			@options = Defaults.dup
+
+			begin
+				CommandRunner::Which.values_at(:zfs,:xargs)
+			rescue CommandRunner::Error => e
+				abort(e.message)
+			end
 
 			case args.shift
 			when 'auto'    then cmd_auto args
