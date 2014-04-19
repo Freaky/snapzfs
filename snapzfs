@@ -31,10 +31,20 @@ module Snap
 		end
 
 		def self.xargs(cmd, args: [], items: [], xargs: [])
-			cmd = [Which[:xargs], '-0', *xargs, Which[cmd], *args]
-			p cmd if $VERBOSE
+			begin
+				pcmd = [Which[:xargs], '-0', *xargs, Which[cmd], *args]
+				p pcmd if $VERBOSE
 
-			self.popen(cmd) {|f| f.write(items.join("\000"))}
+				self.popen(pcmd) {|f| f.write(items.join("\000"))}
+			rescue Error => e
+				# Older ZFS doesn't support multiple snapshots :(
+				if !xargs.include? '-n' and e.message =~ /too many arguments/
+					xargs += %w(-n 1)
+					retry
+				else
+					raise e
+				end
+			end
 		end
 
 		def self.popen(*cmd, &block)
