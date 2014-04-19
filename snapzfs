@@ -61,7 +61,7 @@ module Snap
 			if $?.success?
 				return out || true
 			else
-				raise Error, "Error running #{cmd.join(' ').dump}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
+				raise Error, "Error running #{cmd.inspect}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
 			end
 		end
 
