@@ -321,6 +321,7 @@ module Snap
 				else
 					raise ArgumentError, "Unable to parse interval: #{part.dump}"
 				end
+				raise ArgumentError, "Minimum policy time is 1 minute" if pol.seconds < 60
 				raise ArgumentError, "Duplicate interval: #{part.dump}" if used_policies.include? pol.seconds
 				used_policies << pol.seconds
 				pol
@@ -474,7 +475,7 @@ module Snap
 				snapshots = dataset.auto_snapshots
 				policy(dataset).each do |pol|
 					pol_snapshots = snapshots.select {|snapshot| snapshot.policies.include? pol.seconds }
-					if pol_snapshots.empty? or pol_snapshots.last.age(now) > pol.seconds
+					if pol_snapshots.empty? or pol_snapshots.last.age(now) >= (pol.seconds - 15)
 						policies << pol.seconds
 					end
 				end
