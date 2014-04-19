@@ -187,12 +187,12 @@ module Snap
 
 			def expires_at
 				if (prop = properties[ZFS.property :expires_at]) != '-'
-					@expires_at ||= Time.at(Integer(prop)).gmtime
+					@expires_at ||= Time.at(Integer(prop))
 				end
 			end
 
 			def created_at
-				@created_at ||= Time.at(Integer(properties[ZFS.property :created_at])).gmtime
+				@created_at ||= Time.at(Integer(properties[ZFS.property :created_at]))
 			end
 
 			def age(now)
@@ -346,7 +346,7 @@ module Snap
 			@all_args = args
 			args = args.dup
 
-			@now = Time.new.gmtime
+			@now = Time.new
 
 			@options = Defaults.dup
 
@@ -460,7 +460,7 @@ module Snap
 		end
 
 		def snap_name
-			@name ||= "#{options[:prefix]}#{now.strftime(options[:format])}"
+			@name ||= "#{options[:prefix]}#{now.dup.utc.strftime(options[:format])}"
 		end
 
 		def cmd_create(args)
