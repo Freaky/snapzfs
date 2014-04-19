@@ -245,15 +245,19 @@ module Snap
 				end
 				queued_snapshots.clear
 
+				workers = []
 				queued_destroys.group_by(&:snapshot_of).each do |dataset,snapshots|
-					op = %w(destroy -d)
-					op += ["#{dataset}@#{snapshots.map(&:snap_name).join(',')}"]
-					if $dry
-						pp op
-					else
-						CommandRunner.zfs(op)
+					workers << Thread.new do
+						op = %w(destroy -d)
+						op += ["#{dataset}@#{snapshots.map(&:snap_name).join(',')}"]
+						if $dry
+							pp op
+						else
+							CommandRunner.zfs(op)
+						end
 					end
 				end
+				workers.each(&:join)
 				queued_destroys.clear
 			end
 
