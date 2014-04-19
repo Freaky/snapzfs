@@ -124,10 +124,6 @@ module Snap
 			def initialize(properties)
 				@properties = properties
 			end
-
-			def destroy!
-				ZFS.destroy self
-			end
 		end
 
 		class Snapshottable < Dataset
@@ -213,6 +209,10 @@ module Snap
 
 			def snapshot_of
 				name.split('@').first
+			end
+
+			def destroy!
+				ZFS.destroy self
 			end
 		end
 
