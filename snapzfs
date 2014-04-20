@@ -404,6 +404,15 @@ module Snap
 			pid_file: '/var/run/snapzfs.pid',
 			policy: '4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
 		}
+
+		Command = Struct.new(:name, :opts, :proc)
+
+		class << self
+			def command(name, &block)
+				define_method("cmd_#{name}", block)
+			end
+		end
+
 		def self.run(args)
 			new(args)
 		end
@@ -422,18 +431,47 @@ module Snap
 				abort(e.message)
 			end
 
-			case args.shift
-			when 'auto'    then cmd_auto args
-			when 'create'  then cmd_create args
-			when 'expire'  then cmd_expire args
-			when 'nuke'    then cmd_nuke args
-			when 'list'    then cmd_list args
-			when 'policy'  then cmd_policy args
-			when 'disable' then cmd_disable args
-			when 'enable'  then cmd_enable args
-			when 'clean'   then cmd_clean args
-			else usage
+			PidFile.with_file(options[:pid_file]) do
+			#	sleep 10
+
+				cmd = "cmd_#{args.shift}".to_sym
+				if respond_to? cmd
+					meth = method(cmd)
+					if meth.arity.zero?
+						usage if args.any?
+						meth.call
+					else
+						meth.call(args)
+					end
+				else
+					usage
+				end
+
+				# case args.shift
+				# when 'auto'    then cmd_auto args
+				# when 'create'  then cmd_create args
+				# when 'expire'  then cmd_expire args
+				# when 'nuke'    then cmd_nuke args
+				# when 'list'    then cmd_list args
+				# when 'policy'  then cmd_policy args
+				# when 'disable' then cmd_disable args
+				# when 'enable'  then cmd_enable args
+				# when 'clean'   then cmd_clean args
+				# else usage
+				# end
 			end
+		rescue PidFile::AlreadyRunningError, CommandRunner::Error => e
+			abort(e.message)
+		rescue SystemExit => e
+			exit e.status
+		rescue Exception => e
+			abort <<EOC
+*** BUG: unhandled exception
+Please report this to tom@hur.st
+
+#{e.class}: #{e.message}
+  #{e.backtrace.join("\n  ")}
+EOC
 		end
 
 		def d(txt = nil)
@@ -442,12 +480,27 @@ module Snap
 
 		def datasets() @datasets ||= ZFS.datasets end
 		def datasets_refresh() @datasets = ZFS.datasets end
+		def managed_snapshots
+			@managed_snapshots ||= datasets.values.map(&:auto_snapshots).flatten
+		end
+		def managed_datasets
+			@managed_datasets ||= datasets.values.select(&:auto_snapshot?)
+		end
 
 		def policy(dataset)
 			dataset.policy || ZFS::Snapshottable.policy_cache(options[:policy])
 		end
 
-		def cmd_policy(args)
+		def toggle(args, bool)
+			args.each {|arg| CommandRunner.zfs(['set', "#{ZFS.property :auto}=#{bool ? 'true' : 'false'}", arg])}
+		end
+
+		def snap_name
+			@name ||= "#{options[:prefix]}#{now.dup.utc.strftime(options[:format])}"
+		end
+
+		#def cmd_policy(args)
+		command :policy do |args|
 			if args.empty?
 				managed_datasets.each do |dataset|
 					puts " * #{dataset.name}: #{policy(dataset).map(&:raw).join('; ')}"
@@ -476,32 +529,24 @@ module Snap
 			end
 		end
 
-		def switch(args, bool)
-			args.each {|arg| CommandRunner.zfs(['set', "#{ZFS.property :auto}=#{bool ? 'true' : 'false'}", arg])}
+		#def cmd_enable(args)
+		command :enable do |args|
+			toggle(args, true)
 		end
 
-		def cmd_enable(args)
-			switch(args, true)
+		#def cmd_disable(args)
+		command :disable do |args|
+			toggle(args, false)
 		end
 
-		def cmd_disable(args)
-			switch(args, false)
-		end
-
-		def managed_snapshots
-			@managed_snapshots ||= datasets.values.map(&:auto_snapshots).flatten
-		end
-
-		def managed_datasets
-			@managed_datasets ||= datasets.values.select(&:auto_snapshot?)
-		end
-
-		def cmd_list(args)
+		#def cmd_list(args)
+		command :list do |args|
 			exit if managed_snapshots.empty?
 			print CommandRunner.xargs(:zfs, args: ['list', *args], items: managed_snapshots.map(&:name))
 		end
 
-		def cmd_nuke(args)
+		#def cmd_nuke(args)
+		command :nuke do
 			unless STDOUT.tty?
 				abort("Nuke command is strictly interactive-only.")
 			end
@@ -525,11 +570,8 @@ module Snap
 			end
 		end
 
-		def snap_name
-			@name ||= "#{options[:prefix]}#{now.dup.utc.strftime(options[:format])}"
-		end
-
-		def cmd_create(args)
+		#def cmd_create(args)
+		command :create do
 			managed_datasets.each do |dataset|
 				d "#{dataset.name}..."
 				policies = []
@@ -554,7 +596,8 @@ module Snap
 			ZFS.commit!
 		end
 
-		def cmd_expire(args)
+		#def cmd_expire(args)
+		command :expire do
 			datasets.each do |name, dataset|
 				dataset.auto_snapshots.each do |snapshot|
 					refs = 0
@@ -576,7 +619,8 @@ module Snap
 			ZFS.commit!
 		end
 
-		def cmd_clean(args)
+		#def cmd_clean(args)
+		command :clean do
 			datasets_refresh.each do |name, dataset|
 				dataset.auto_snapshots.group_by(&:policies).each do |pol, snapshots|
 					next if snapshots.size < 2
@@ -590,10 +634,11 @@ module Snap
 			ZFS.commit!
 		end
 
-		def cmd_auto(args)
-			cmd_create args.dup
-			cmd_expire args.dup
-			cmd_clean args.dup
+		#def cmd_auto(args)
+		command :auto do
+			cmd_create
+			cmd_expire
+			cmd_clean
 		end
 
 		def usage
