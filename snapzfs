@@ -16,8 +16,31 @@ require 'time'
 $dry = false
 
 module Snap
+	module Exits # *stab* Ruby for not providing these.
+		EX_OK = 0
+		EX_USAGE = 64
+		EX_UNAVAILABLE=69
+		EX_TEMPFAIL = 75
+		EX_CONFIG = 78
+	end
+
 	module CommandRunner
-		class Error < StandardError
+		class Error < StandardError ; end
+
+		class NotFoundError < Error
+			attr_reader :command, :path
+			def initialize(message, command = nil)
+				super(message)
+				@command = command
+			end
+		end
+
+		class CommandError < Error
+			attr_reader :status
+			def initialize(message, status = nil)
+				super(message)
+				@status = status
+			end
 		end
 
 		def self.zfs(args)
@@ -36,7 +59,7 @@ module Snap
 				p pcmd if $VERBOSE
 
 				self.popen(pcmd) {|f| f.write(items.join("\000"))}
-			rescue Error => e
+			rescue CommandError => e
 				# Older ZFS doesn't support multiple snapshots :(
 				if !xargs.include? '-n' and e.message =~ /too many arguments/
 					xargs += %w(-n 1)
@@ -61,7 +84,7 @@ module Snap
 			if $?.success?
 				return out || true
 			else
-				raise Error, "Error running #{cmd.inspect}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}"
+				raise CommandError.new("Error running #{cmd.inspect}, exit=#{$?.exitstatus}, stderr=\n#{err.gsub(/^/,"> ")}", $?)
 			end
 		end
 
@@ -79,7 +102,7 @@ module Snap
 			if hash.key?(cmd)
 				hash[cmd]
 			else
-				raise Error, "#{cmd} not found in #{ENV['PATH']}"
+				raise NotFoundError.new("#{cmd} not found in #{ENV['PATH']}", cmd)
 			end
 		end
 	end
@@ -428,40 +451,35 @@ module Snap
 			begin
 				CommandRunner::Which.values_at(:zfs,:xargs)
 			rescue CommandRunner::Error => e
-				abort(e.message)
+				puts e.message
+				exit(Exits::EX_UNAVAILABLE)
 			end
 
 			PidFile.with_file(options[:pid_file]) do
-			#	sleep 10
-
 				cmd = "cmd_#{args.shift}".to_sym
 				if respond_to? cmd
 					meth = method(cmd)
 					if meth.arity.zero?
-						usage if args.any?
+						if args.any?
+							usage_error
+							exit 1
+						end
 						meth.call
 					else
 						meth.call(args)
 					end
 				else
-					usage
+					usage_error
 				end
-
-				# case args.shift
-				# when 'auto'    then cmd_auto args
-				# when 'create'  then cmd_create args
-				# when 'expire'  then cmd_expire args
-				# when 'nuke'    then cmd_nuke args
-				# when 'list'    then cmd_list args
-				# when 'policy'  then cmd_policy args
-				# when 'disable' then cmd_disable args
-				# when 'enable'  then cmd_enable args
-				# when 'clean'   then cmd_clean args
-				# else usage
-				# end
 			end
-		rescue PidFile::AlreadyRunningError, CommandRunner::Error => e
+		rescue PidFile::AlreadyRunningError => e
 			abort(e.message)
+		rescue CommandRunner::NotFoundError => e
+			puts e.message
+			exit Exits::EX_UNAVAILABLE
+		rescue CommandRunner::CommandError => e
+			puts e.message
+			exit e.status.exitcode
 		rescue SystemExit => e
 			exit e.status
 		rescue Exception => e
@@ -641,10 +659,16 @@ EOC
 			cmd_clean
 		end
 
-		def usage
+		%w(help --help -h).each{|s| command(s) { usage }}
+
+		def usage_error() usage(Exits::EX_USAGE) end
+		def usage(exitcode = 0)
 			puts <<EOC
 snapzfs: Yet another stupid and probably broken ZFS rolling snapshot script you
          probably shouldn't use.
+
+#{$0} [help | --help | -h]
+  Prints this help text.
 
 #{$0} [create | expire]
   Creates or destroys snapshots according to the policy for each dataset.
@@ -694,6 +718,7 @@ Policies:
 
   Keep 4 snapshots at 3-hour intervals.
 EOC
+			exit exitcode
 		end
 	end
 end
