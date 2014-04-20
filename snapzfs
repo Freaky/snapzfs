@@ -451,7 +451,7 @@ module Snap
 			begin
 				CommandRunner::Which.values_at(:zfs,:xargs)
 			rescue CommandRunner::Error => e
-				puts e.message
+				$stderr.puts e.message
 				exit(Exits::EX_UNAVAILABLE)
 			end
 
@@ -663,7 +663,7 @@ EOC
 
 		def usage_error() usage(Exits::EX_USAGE) end
 		def usage(exitcode = 0)
-			puts <<EOC
+			(exitcode.zero? ? $stdout : $stderr).puts <<EOC
 snapzfs: Yet another stupid and probably broken ZFS rolling snapshot script you
          probably shouldn't use.
 
