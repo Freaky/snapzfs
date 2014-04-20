@@ -333,6 +333,66 @@ module Snap
 		end
 	end
 
+	class PidFile
+		class AlreadyRunningError < StandardError
+		end
+
+		def already_running
+			raise AlreadyRunningError, "Already running as pid #{@pid}"
+		end
+
+		def process_exists?(pid)
+			!!Process.kill(0, pid)
+		rescue Errno::ESRCH
+			return false
+		end
+
+		def lock
+			@pidfile.flock(IO::LOCK_EX|IO::LOCK_NB)
+		end
+
+		def initialize(file)
+			@filename = file
+			@aquired = false
+
+			aquire
+		end
+
+		def self.with_file(file, &block)
+			pidfile = new(file)
+			block.call
+		ensure
+			pidfile and pidfile.release
+		end
+
+		def aquire
+			@pidfile = File.new(@filename, File::CREAT|File::RDWR)
+
+			@pid = @pidfile.read.to_i
+			@pidfile.rewind
+
+			already_running unless lock
+			already_running if @pid.nonzero? and process_exists?(@pid)
+
+			@pidfile.write($$.to_s)
+			@pidfile.flush
+			@aquired = true
+		rescue => e
+			release
+			raise e
+		end
+
+		def release
+			if @pidfile and !@pidfile.closed?
+				begin
+					File.delete(@filename) if @aquired
+				ensure
+					@pidfile.close
+				end
+			end
+		end
+	end
+
 	class App
 		attr_reader :options, :now
 
@@ -341,6 +401,7 @@ module Snap
 			format: '%FT%RZ',
 			verbose: false,
 			dry_run: false,
+			pid_file: '/var/run/snapzfs.pid',
 			policy: '4 * 1 minutes; 4 * 15 minutes; 24 hourly; 7 daily; 4 weekly; 4 monthly',
 		}
 		def self.run(args)
