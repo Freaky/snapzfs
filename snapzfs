@@ -526,13 +526,13 @@ EOC
 						puts "    #{pol.raw}: #{pol.count} snapshots #{pol.seconds} (#{'%.2f' % (pol.seconds / 3600.0)} hours) apart"
 					end
 				end
-				exit 0
+				exit
 			end
 
 			spec = args.shift
 			if spec == 'reset'
 				args.each {|arg| CommandRunner.zfs(['inherit', ZFS.property(:policy), arg])}
-				exit 0
+				exit
 			end
 
 			begin
