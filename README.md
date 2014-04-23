@@ -22,10 +22,10 @@ Usage
 -----
 
     snapzfs policy "4 * 15 minutes; 24 hourly; 7 daily; 4 weekly" tank
-    echo "*/15 * * * * root /path/to/snapzfs auto" >>/etc/crontab
     snapzfs disable tank/junk
     snapzfs enable tank/junk/important
     snapzfs policy "7 daily" tank/media
+    echo "*/15 * * * * root /path/to/snapzfs auto" >>/etc/crontab
 
 Keeps four snapshots at 15 minute intervals, 24 at hourly intervals, 7 at daily
 intervals, and 4 at weekly intervals.  `snapzfs list` to view them. `snapzfs nuke`
