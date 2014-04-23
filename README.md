@@ -22,7 +22,7 @@ Usage
 -----
 
     snapzfs policy "4 * 15 minutes; 24 hourly; 7 daily; 4 weekly" tank
-    `echo "*/15 * * * * root /path/to/snapzfs auto" >>/etc/crontab`
+    echo "*/15 * * * * root /path/to/snapzfs auto" >>/etc/crontab
     snapzfs disable tank/junk
     snapzfs enable tank/junk/important
     snapzfs policy "7 daily" tank/media
