@@ -663,7 +663,7 @@ EOC
 
 		def usage_error() usage(Exits::EX_USAGE) end
 		def usage(exitcode = 0)
-			(exitcode.zero? ? $stdout : $stderr).puts <<EOC
+			(exitcode.zero? ? $stdout : $stderr).puts <<-EOC
 snapzfs: Yet another stupid and probably broken ZFS rolling snapshot script you
          probably shouldn't use.
 
