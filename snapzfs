@@ -263,7 +263,7 @@ module Snap
 					if $dry
 						pp [op, names]
 					else
-						CommandRunner.xargs(:zfs, args: op, items: names)
+						CommandRunner.xargs(:zfs, args: op, items: names, xargs: %w(-n 1 -P 12))
 					end
 				end
 				queued_snapshots.clear
