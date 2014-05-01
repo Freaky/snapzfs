@@ -479,7 +479,7 @@ module Snap
 			exit Exits::EX_UNAVAILABLE
 		rescue CommandRunner::CommandError => e
 			puts e.message
-			exit e.status.exitcode
+			exit e.status.exitstatus
 		rescue SystemExit => e
 			exit e.status
 		rescue Exception => e
