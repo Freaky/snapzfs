@@ -57,6 +57,7 @@ module Snap
 			begin
 				pcmd = [Which[:xargs], '-0', *xargs, Which[cmd], *args]
 				p pcmd if $VERBOSE
+				pp items if $VERBOSE
 
 				self.popen(pcmd) {|f| f.write(items.join("\000"))}
 			rescue CommandError => e
