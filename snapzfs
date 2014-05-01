@@ -260,7 +260,6 @@ module Snap
 				queued_snapshots.each do |properties, names|
 					op = %w(snapshot)
 					op += properties.map {|name,value| ['-o', "#{name}=#{value}"] }.flatten
-					#op += names
 					if $dry
 						pp [op, names]
 					else
