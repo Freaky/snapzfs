@@ -159,7 +159,7 @@ module Snap
 			end
 
 			def auto_snapshot?
-				properties[ZFS.property :auto] != '-'
+				properties[ZFS.property :auto] == 'true'
 			end
 
 			def auto_snapshots
@@ -724,3 +724,4 @@ EOC
 end
 
 Snap::App.run(ARGV)
+
