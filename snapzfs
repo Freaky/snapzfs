@@ -516,7 +516,6 @@ EOC
 			@name ||= "#{options[:prefix]}#{now.dup.utc.strftime(options[:format])}"
 		end
 
-		#def cmd_policy(args)
 		command :policy do |args|
 			if args.empty?
 				managed_datasets.each do |dataset|
@@ -546,23 +545,19 @@ EOC
 			end
 		end
 
-		#def cmd_enable(args)
 		command :enable do |args|
 			toggle(args, true)
 		end
 
-		#def cmd_disable(args)
 		command :disable do |args|
 			toggle(args, false)
 		end
 
-		#def cmd_list(args)
 		command :list do |args|
 			exit if managed_snapshots.empty?
 			print CommandRunner.xargs(:zfs, args: ['list', *args], items: managed_snapshots.map(&:name))
 		end
 
-		#def cmd_nuke(args)
 		command :nuke do
 			unless STDOUT.tty?
 				abort("Nuke command is strictly interactive-only.")
@@ -587,7 +582,6 @@ EOC
 			end
 		end
 
-		#def cmd_create(args)
 		command :create do
 			managed_datasets.each do |dataset|
 				d "#{dataset.name}..."
@@ -613,7 +607,6 @@ EOC
 			ZFS.commit!
 		end
 
-		#def cmd_expire(args)
 		command :expire do
 			datasets.each do |name, dataset|
 				dataset.auto_snapshots.each do |snapshot|
@@ -636,7 +629,6 @@ EOC
 			ZFS.commit!
 		end
 
-		#def cmd_clean(args)
 		command :clean do
 			datasets_refresh.each do |name, dataset|
 				dataset.auto_snapshots.group_by(&:policies).each do |pol, snapshots|
@@ -651,7 +643,6 @@ EOC
 			ZFS.commit!
 		end
 
-		#def cmd_auto(args)
 		command :auto do
 			cmd_create
 			cmd_expire
