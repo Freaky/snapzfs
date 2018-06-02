@@ -312,8 +312,7 @@ module Snap
 		end
 	end
 
-	Policy = Struct.new(:raw, :seconds, :count)
-	class Policy # Rename Policy, support "midnight", "end of day", "start of month" etc?
+	Policy = Struct.new(:raw, :seconds, :count) do
 		Periods = {
 			1           => %w(s sec secs second seconds secondly),
 			60          => %w(m min minute minutes minutely),
