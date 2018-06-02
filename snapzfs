@@ -322,7 +322,7 @@ module Snap
 			3600*24*7   => %w(wk week weeks weekly),
 			3600*24*14  => %w(f fort fortnight fortnightly),
 			3600*24*31  => %w(mn mon month months monthly),
-			3600*24*356 => %w(y yr year years yearly),
+			3600*24*365 => %w(y yr year years yearly),
 		}
 
 		PeriodRE = /(?:#{Periods.values.flatten.join('|')})/i
